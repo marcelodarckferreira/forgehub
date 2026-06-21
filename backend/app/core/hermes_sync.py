@@ -1,0 +1,219 @@
+"""Parsers for the Hermes Foundation canonical agent registry.
+
+Pure filesystem-reading helpers (no DB access) used by
+POST /api/v1/agents/sync/hermes-foundation (app/api/routes/agent.py) to
+populate the Agent domain from the Hermes ecosystem's canonical docs.
+
+Canonical source (confirmed by /root/.hermes/foundation/agents/README.md
+and the `hermes-foundation-agent-registry` skill -- NOT
+/root/.hermes/foundation/vault/Agents/, which is a derived mirror of only
+the 8 baseline profiles and explicitly points back here):
+  - ECOSYSTEM_AGENTS.md   -- registry: profile/name/layer/role/telegram
+  - AGENT_RUNTIME_MATRIX.md -- runtime tier (A/B/C) per profile
+  - SUBAGENTS_CATALOG.md  -- WORKER/ROLE sub-agent labels per agent
+  - <NAME>.md              -- per-agent contract (Mission section)
+
+Mounted read-only into the backend container at /foundation-agents (see
+docker-compose.yml). Per-profile files (skills/) are read from /profiles,
+already mounted for app/api/routes/foundation.py.
+
+`source_path` values stored on synced rows use the *host* canonical path
+(/root/.hermes/foundation/agents/...) for human traceability, even though
+this module reads through the /foundation-agents mount alias.
+"""
+import re
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+FOUNDATION_AGENTS_DIR = Path("/foundation-agents")
+PROFILES_DIR = Path("/profiles")
+CANONICAL_AGENTS_DOC_ROOT = "/root/.hermes/foundation/agents"
+
+ECOSYSTEM_AGENTS_PATH = FOUNDATION_AGENTS_DIR / "ECOSYSTEM_AGENTS.md"
+RUNTIME_MATRIX_PATH = FOUNDATION_AGENTS_DIR / "AGENT_RUNTIME_MATRIX.md"
+SUBAGENTS_CATALOG_PATH = FOUNDATION_AGENTS_DIR / "SUBAGENTS_CATALOG.md"
+
+_RISK_LEVEL_MAP = {"L": "low", "M": "medium", "H": "high", "C": "critical"}
+
+_SUBAGENT_HEADING_RE = re.compile(r"^###\s+.+\(`([a-z0-9\-]+)`\)\s*$")
+_SUBAGENT_ITEM_RE = re.compile(r"^-\s+`([a-z0-9\-]+)`\s+—\s+(.*)$")
+
+
+def _read_file_safe(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def _contract_filename(profile_slug: str) -> str:
+    return profile_slug.upper().replace("-", "_") + ".md"
+
+
+def _parse_md_table(content: str) -> list[list[str]]:
+    """Return data rows (cells, header/separator rows excluded) from a
+    GitHub-flavored Markdown pipe table."""
+    rows: list[list[str]] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            continue
+        if set(line.replace("|", "").strip()) <= {"-", " "}:
+            continue  # separator row, e.g. "|---|---|---|"
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if cells and cells[0] == "Profile":
+            continue  # header row
+        rows.append(cells)
+    return rows
+
+
+def parse_agent_registry() -> list[dict[str, Any]]:
+    """Roster of every Hermes agent: profile_slug, name, layer, role,
+    telegram_required, runtime_tier. Includes agents documented in the
+    registry that have no provisioned profile directory yet (e.g.
+    `forgenet`) -- callers should check profile_exists() separately."""
+    matrix_content = _read_file_safe(RUNTIME_MATRIX_PATH) or ""
+    tier_by_slug: dict[str, str] = {}
+    for cells in _parse_md_table(matrix_content):
+        if len(cells) < 4:
+            continue
+        tier_by_slug[cells[0].strip("`")] = cells[3].strip()
+
+    registry_content = _read_file_safe(ECOSYSTEM_AGENTS_PATH) or ""
+    agents: list[dict[str, Any]] = []
+    for cells in _parse_md_table(registry_content):
+        if len(cells) < 5:
+            continue
+        slug = cells[0].strip("`")
+        agents.append(
+            {
+                "profile_slug": slug,
+                "name": cells[1],
+                "layer": cells[2],
+                "role": cells[3],
+                "telegram_required": cells[4].strip().lower() == "yes",
+                "runtime_tier": tier_by_slug.get(slug),
+            }
+        )
+    return agents
+
+
+def parse_agent_mission(profile_slug: str) -> tuple[str | None, str | None]:
+    """Returns (mission_text, canonical_source_path) for an agent's
+    contract file, or (None, None) if no contract file exists yet."""
+    filename = _contract_filename(profile_slug)
+    content = _read_file_safe(FOUNDATION_AGENTS_DIR / filename)
+    if content is None:
+        return None, None
+
+    mission_lines: list[str] = []
+    in_section = False
+    for line in content.splitlines():
+        if line.strip() == "## Mission":
+            in_section = True
+            continue
+        if in_section:
+            if line.startswith("## "):
+                break
+            if line.strip():
+                mission_lines.append(line.strip())
+
+    mission = " ".join(mission_lines) if mission_lines else None
+    source_path = f"{CANONICAL_AGENTS_DOC_ROOT}/{filename}"
+    return mission, source_path
+
+
+def parse_subagent_catalog() -> dict[str, list[dict[str, str]]]:
+    """WORKER/ROLE sub-agent labels grouped by owning agent's profile_slug."""
+    content = _read_file_safe(SUBAGENTS_CATALOG_PATH) or ""
+    catalog: dict[str, list[dict[str, str]]] = {}
+    current_slug: str | None = None
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        heading_match = _SUBAGENT_HEADING_RE.match(line)
+        if heading_match:
+            current_slug = heading_match.group(1)
+            catalog.setdefault(current_slug, [])
+            continue
+        item_match = _SUBAGENT_ITEM_RE.match(line)
+        if item_match and current_slug:
+            name, description = item_match.groups()
+            catalog[current_slug].append({"name": name, "description": description.strip()})
+
+    return catalog
+
+
+def profile_exists(profile_slug: str) -> bool:
+    return (PROFILES_DIR / profile_slug).is_dir()
+
+
+def _parse_skill_frontmatter(content: str) -> dict[str, Any]:
+    if not content.startswith("---"):
+        return {}
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return {}
+    try:
+        data = yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def parse_profile_skills(profile_slug: str) -> list[dict[str, Any]]:
+    """Skills declared under a profile's skills/ tree (leaf SKILL.md files
+    only; hidden housekeeping dirs like .hub/.curator_backups are
+    skipped). Skill name/version are read from frontmatter, falling back
+    to the containing directory name and "1.0.0" when absent."""
+    skills_dir = PROFILES_DIR / profile_slug / "skills"
+    if not skills_dir.is_dir():
+        return []
+
+    results: list[dict[str, Any]] = []
+    for skill_md in skills_dir.rglob("SKILL.md"):
+        relative_parts = skill_md.relative_to(skills_dir).parts
+        if any(part.startswith(".") for part in relative_parts):
+            continue
+
+        content = _read_file_safe(skill_md)
+        if content is None:
+            continue
+
+        frontmatter = _parse_skill_frontmatter(content)
+        name = str(frontmatter.get("name") or skill_md.parent.name)
+        version = str(frontmatter.get("version") or "1.0.0")
+        description = frontmatter.get("description")
+
+        metadata = frontmatter.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        created_by = frontmatter.get("created_by") or metadata.get("created_by")
+        origin = (
+            "foundation"
+            if metadata.get("scope") == "governance" or created_by == "agent"
+            else "internal"
+        )
+
+        risk_letter = str(metadata.get("risk_level") or "").strip().upper()
+        risk_level = _RISK_LEVEL_MAP.get(risk_letter, "low")
+
+        prerequisites = frontmatter.get("prerequisites")
+        prerequisites = prerequisites if isinstance(prerequisites, dict) else {}
+        perms = [str(t) for t in (prerequisites.get("tools") or [])]
+        perms += [str(e) for e in (prerequisites.get("env_vars") or [])]
+        permissions = ", ".join(perms) if perms else "unspecified (not declared in source SKILL.md)"
+
+        results.append(
+            {
+                "name": name,
+                "version": version,
+                "description": str(description) if description else None,
+                "origin": origin,
+                "risk_level": risk_level,
+                "permissions": permissions,
+            }
+        )
+
+    return results

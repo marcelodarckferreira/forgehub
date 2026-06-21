@@ -1,0 +1,67 @@
+services:
+  forgehub-backend:
+    build:
+      context: ./backend
+    container_name: forgehub-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # .env's POSTGRES_HOST/PORT (localhost:5433) are for host-side dev,
+      # where the DB is reached via its published port. Inside this
+      # container, "localhost" is the container itself -- reach Postgres
+      # via its container name on the shared hermes_foundation_pg_default
+      # network, on its internal port. These override the env_file values
+      # (docker-compose `environment:` wins over `env_file:`).
+      POSTGRES_HOST: company_postgres
+      POSTGRES_PORT: "5432"
+      # The real Hermes agents (Athos, Atlas, ...) only exist as host
+      # processes -- this container reaches them through the chat bridge
+      # (host-bridge/app.py) running directly on the host, via the
+      # extra_hosts entry below.
+      CHAT_BRIDGE_URL: http://host.docker.internal:8910
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    volumes:
+      # Read-write: backs the Obsidian vault browser/editor
+      # (api/routes/vault.py). Writes go straight to the same files the
+      # desktop Obsidian app reads -- see that router's docstring.
+      - /root/.hermes/foundation/vault:/vault
+      - /root/.hermes/profiles:/profiles
+      - /root/.hermes/foundation/governance:/governance:ro
+      - /root/.hermes/foundation/agents:/foundation-agents:ro
+      # Read-write: backs the Foundation rules browser/editor
+      # (api/routes/foundation_docs.py) -- this is the actual rule set the
+      # Hermes agents operate under, so every read/write there resolves
+      # against this root and is restricted to .md files only.
+      - /root/.hermes/foundation:/foundation-root
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    networks:
+      - default
+      - hermes_foundation_pg_default
+
+  forgehub-frontend:
+    build:
+      context: ./frontend
+    container_name: forgehub-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "4173:4173"
+    depends_on:
+      forgehub-backend:
+        condition: service_healthy
+    networks:
+      - default
+
+networks:
+  hermes_foundation_pg_default:
+    external: true

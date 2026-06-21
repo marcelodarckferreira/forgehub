@@ -1,0 +1,40 @@
+services:
+  postgres_company:
+    image: pgvector/pgvector:pg16
+    container_name: ${CONTAINER_NAME:-company_postgres}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-foundation_company}
+      POSTGRES_USER: ${POSTGRES_USER:-foundation}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-foundation_local_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - /root/.hermes/foundation/data/postgres-company/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foundation} -d ${POSTGRES_DB:-foundation_company}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 10
+    networks:
+      default: {}
+      hermes_foundation_pg_default:
+        aliases:
+          - forgecompany_postgres
+          - postgres_company
+
+networks:
+  hermes_foundation_pg_default:
+    external: true
+
+# Observação: este compose reconstrói a definição do container `company_postgres`,
+# que já existe e está rodando desde a migração ForgeCompany (2026-06-11), mas cujo
+# docker-compose.yml original (em /root/ForgeCompany/database/postgres-company/) foi
+# perdido no rename ForgeCompany -> Forgehub. Os databases reais hospedados aqui hoje
+# são `forgehub` e `kanboard` (criados manualmente após o container subir) — o valor
+# de POSTGRES_DB acima só importa na criação inicial do container e não precisa mudar.
+#
+# Antes de rodar `docker compose up -d` aqui, valide com `docker compose config` e
+# `docker compose up -d --no-recreate` / inspecione se o hash de config bate, para não
+# reiniciar à toa um banco em uso (Kanboard depende dele).

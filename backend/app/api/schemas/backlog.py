@@ -1,0 +1,191 @@
+"""Pydantic schemas for the Backlog domain (planning_items,
+feature_requests, bug_reports, version_scope_items, triage_decisions).
+
+Response style: plain models, no envelope wrapper -- routes return the
+resource (or list of resources) directly. `Read` schemas use
+`model_config = ConfigDict(from_attributes=True)` for ORM -> schema
+conversion, per foundation convention.
+"""
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.db.models.backlog import (
+    BUG_SEVERITIES,
+    PLANNING_ITEM_STATUSES,
+    PLANNING_ITEM_TYPES,
+    TRIAGE_OUTCOMES,
+)
+
+# --------------------------------------------------------------------------
+# PlanningItem
+# --------------------------------------------------------------------------
+
+
+class PlanningItemBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    item_type: str = Field(..., description=f"One of {PLANNING_ITEM_TYPES}")
+    priority: str = Field(default="medium", max_length=16)
+    project_id: uuid.UUID | None = None
+    target_version_id: uuid.UUID | None = None
+
+
+class PlanningItemCreate(PlanningItemBase):
+    pass
+
+
+class PlanningItemUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    item_type: str | None = None
+    status: str | None = None
+    priority: str | None = None
+    project_id: uuid.UUID | None = None
+    target_version_id: uuid.UUID | None = None
+
+
+class PlanningItemOut(PlanningItemBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    status: str
+    baselined: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# FeatureRequest
+# --------------------------------------------------------------------------
+
+
+class FeatureRequestBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    requested_by: str | None = Field(default=None, max_length=255)
+    business_value: str | None = None
+
+
+class FeatureRequestCreate(FeatureRequestBase):
+    pass
+
+
+class FeatureRequestUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    requested_by: str | None = None
+    business_value: str | None = None
+
+
+class FeatureRequestOut(FeatureRequestBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    planning_item_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FeatureRequestConvert(BaseModel):
+    """Body for POST /feature-requests/{id}/convert."""
+
+    project_id: uuid.UUID | None = None
+    target_version_id: uuid.UUID | None = None
+    priority: str = Field(default="medium", max_length=16)
+
+
+# --------------------------------------------------------------------------
+# BugReport
+# --------------------------------------------------------------------------
+
+
+class BugReportBase(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    severity: str = Field(default="medium", description=f"One of {BUG_SEVERITIES}")
+    environment: str | None = Field(default=None, max_length=255)
+    reproduction_steps: str | None = None
+    root_cause: str | None = None
+    detected_version_id: uuid.UUID | None = None
+    fixed_in_version_id: uuid.UUID | None = None
+
+
+class BugReportCreate(BugReportBase):
+    pass
+
+
+class BugReportUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    severity: str | None = None
+    environment: str | None = None
+    reproduction_steps: str | None = None
+    root_cause: str | None = None
+    detected_version_id: uuid.UUID | None = None
+    fixed_in_version_id: uuid.UUID | None = None
+
+
+class BugReportOut(BugReportBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    planning_item_id: uuid.UUID | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class BugReportConvert(BaseModel):
+    """Body for POST /bug-reports/{id}/convert."""
+
+    project_id: uuid.UUID | None = None
+    target_version_id: uuid.UUID | None = None
+    priority: str = Field(default="medium", max_length=16)
+
+
+# --------------------------------------------------------------------------
+# VersionScopeItem
+# --------------------------------------------------------------------------
+
+
+class VersionScopeItemBase(BaseModel):
+    planning_item_id: uuid.UUID
+    product_version_id: uuid.UUID
+    notes: str | None = None
+
+
+class VersionScopeItemCreate(VersionScopeItemBase):
+    pass
+
+
+class VersionScopeItemOut(VersionScopeItemBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+# --------------------------------------------------------------------------
+# TriageDecision
+# --------------------------------------------------------------------------
+
+
+class TriageDecisionBase(BaseModel):
+    planning_item_id: uuid.UUID
+    outcome: str = Field(..., description=f"One of {TRIAGE_OUTCOMES}")
+    rationale: str | None = None
+    decided_by: str | None = Field(default=None, max_length=255)
+
+
+class TriageDecisionCreate(TriageDecisionBase):
+    pass
+
+
+class TriageDecisionOut(TriageDecisionBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime

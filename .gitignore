@@ -1,0 +1,25 @@
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+
+# Claude Code local settings (machine-specific permissions)
+.claude/settings.local.json
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node / frontend build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+*.swp
