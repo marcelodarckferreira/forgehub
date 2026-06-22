@@ -31,6 +31,7 @@ import os
 import pty
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import tempfile
@@ -665,6 +666,19 @@ async def terminal_ws(
                 os.write(fd, payload.get("data", "").encode())
             elif payload.get("type") == "resize":
                 _set_winsize(fd, int(payload.get("rows", 24)), int(payload.get("cols", 80)))
+                # Unlike a plain bash PTY, the tmux client here doesn't have
+                # this PTY as its controlling terminal (it was never set up
+                # via setsid + TIOCSCTTY, which is what makes the kernel
+                # deliver SIGWINCH automatically on TIOCSWINSZ) -- so the
+                # resize above is invisible to it until nudged explicitly,
+                # leaving the tmux window stuck at its creation size while
+                # xterm.js on the browser side resizes freely. Confirmed via
+                # direct testing: tmux only picks up the new size once it
+                # actually receives SIGWINCH itself.
+                try:
+                    os.kill(proc.pid, signal.SIGWINCH)
+                except ProcessLookupError:
+                    pass
     except WebSocketDisconnect:
         pass
     finally:
