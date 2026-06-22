@@ -37,3 +37,4 @@ from app.db.models.agent import (  # noqa: F401
 from app.db.models.artifact import Artifact, ArtifactVersion  # noqa: F401
 from app.db.models.governance import Policy, Approval, AuditEvent  # noqa: F401
 from app.db.models.chat import ChatSession, ChatMessage  # noqa: F401
+from app.db.models.toolversions import ToolVersionStatus, ToolSyncSetting  # noqa: F401

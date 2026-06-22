@@ -1,4 +1,5 @@
-import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { ToolVersionsCard } from "@/components/ToolVersionsCard";
+import { SystemStatsCard } from "@/components/SystemStatsCard";
 
 export default function Dashboard() {
   return (
@@ -7,14 +8,10 @@ export default function Dashboard() {
         <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-muted-foreground">Welcome to ForgeHub.</p>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Getting started</CardTitle>
-          <CardDescription>
-            Domain pages will appear in the sidebar once wired in.
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <div className="grid gap-6 md:grid-cols-2">
+        <ToolVersionsCard />
+        <SystemStatsCard />
+      </div>
     </div>
   );
 }

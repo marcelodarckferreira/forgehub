@@ -506,7 +506,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] gap-4">
+    <div className="flex min-h-0 flex-1 gap-4 pl-4">
       {!historyCollapsed && (
         <aside className="flex w-64 shrink-0 flex-col rounded-lg border border-border bg-card">
           <div className="flex items-center justify-between border-b border-border p-3">

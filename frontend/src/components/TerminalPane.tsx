@@ -21,6 +21,7 @@ interface TerminalPaneProps {
 export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const termRef = useRef<Terminal | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -36,13 +37,34 @@ export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
     term.open(container);
     fitAddon.fit();
     fitAddonRef.current = fitAddon;
+    termRef.current = term;
 
     const params = new URLSearchParams();
     if (command) params.set("command", command);
     if (cwd) params.set("cwd", cwd);
     const ws = new WebSocket(`${WS_BASE}/api/v1/terminal/ws?${params.toString()}`);
 
-    ws.onmessage = (event) => term.write(event.data as string);
+    // The PTY is read in fixed-size chunks on the host, so the DECRQM
+    // sequence stripped below can land split across two WebSocket messages.
+    // Hold back a trailing prefix that could still grow into a full match
+    // (rather than writing it immediately) and prepend it to the next
+    // message, so the strip below can't be defeated by an unlucky chunk
+    // boundary.
+    let pendingTail = "";
+    ws.onmessage = (event) => {
+      // @xterm/xterm 6.0.0's DECRQM handler (CSI ? Pm $ p, used by CLIs like
+      // Antigravity's `agy` to probe synchronized-output support) throws
+      // "r is not defined" inside its own minified bundle and corrupts the
+      // parser for the rest of the session -- strip the query before it
+      // ever reaches xterm's parser. The app being probed just treats a
+      // missing reply as "unsupported", same as without this fix's filtering.
+      const raw = pendingTail + (event.data as string);
+      const partial = raw.match(/\x1b\[\??[0-9;]*\$?$/);
+      const safeEnd = partial ? partial.index! : raw.length;
+      pendingTail = raw.slice(safeEnd);
+      const data = raw.slice(0, safeEnd).replace(/\x1b\[\??[0-9;]*\$p/g, "");
+      term.write(data);
+    };
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     };
@@ -100,7 +122,15 @@ export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
   }, []);
 
   useEffect(() => {
-    if (active) fitAddonRef.current?.fit();
+    if (!active) return;
+    fitAddonRef.current?.fit();
+    // The pane's parent toggles display:none while inactive, so the
+    // background process can keep redrawing (e.g. Hermes's live activity
+    // feed) while nothing is on screen to receive it. Force a full repaint
+    // on becoming visible again instead of waiting for the next byte from
+    // the PTY, which could be seconds away or never come if it's idle.
+    const term = termRef.current;
+    if (term) term.refresh(0, term.rows - 1);
   }, [active]);
 
   return <div ref={containerRef} className="h-full w-full" />;
