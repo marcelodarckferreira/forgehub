@@ -256,7 +256,14 @@ def _memory_stats() -> dict:
 
 
 def _disk_stats() -> dict:
-    usage = shutil.disk_usage("/")
+    # This host runs under WSL2: "/" is the distro's own ext4.vhdx, a
+    # separate virtual disk from the real Windows machine and a poor proxy
+    # for "is the computer's disk full" -- it stays mostly empty regardless
+    # of how full the actual C: drive gets. /mnt/c (Windows' C:\ via drvfs)
+    # is the disk that actually matters; fall back to "/" if it's unmounted
+    # (e.g. running outside WSL).
+    path = "/mnt/c" if os.path.ismount("/mnt/c") else "/"
+    usage = shutil.disk_usage(path)
     return {
         "total_bytes": usage.total,
         "used_bytes": usage.used,
