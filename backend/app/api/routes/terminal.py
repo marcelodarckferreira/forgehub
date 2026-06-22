@@ -40,6 +40,23 @@ async def browse_dirs(path: str | None = Query(default=None)) -> dict:
     return resp.json()
 
 
+@router.post("/sessions/{session_id}/kill")
+async def kill_session(session_id: str) -> dict:
+    """Proxy to the bridge's session kill -- ends a terminal tab's tmux
+    session for good (vs. a WebSocket disconnect, which only detaches it).
+    Called when the user explicitly closes a terminal tab."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{settings.CHAT_BRIDGE_URL}/v1/terminal/sessions/{session_id}/kill",
+            headers={"X-Bridge-Token": settings.CHAT_BRIDGE_TOKEN},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Chat bridge error: {resp.text[:500]}"
+        )
+    return resp.json()
+
+
 @router.post("/upload-image")
 async def upload_image(file: UploadFile = File(...)) -> dict:
     """Proxy an image pasted into a terminal pane to the bridge, which
@@ -64,13 +81,14 @@ async def upload_image(file: UploadFile = File(...)) -> dict:
 @router.websocket("/ws")
 async def terminal_ws(
     websocket: WebSocket,
+    session: str = Query(...),
     command: str | None = Query(default=None),
     cwd: str | None = Query(default=None),
 ) -> None:
     await websocket.accept()
 
     bridge_ws_url = settings.CHAT_BRIDGE_URL.replace("http://", "ws://").replace("https://", "wss://")
-    bridge_ws_url += f"/v1/terminal/ws?token={settings.CHAT_BRIDGE_TOKEN}"
+    bridge_ws_url += f"/v1/terminal/ws?token={settings.CHAT_BRIDGE_TOKEN}&session={quote(session)}"
     if command:
         bridge_ws_url += f"&command={quote(command)}"
     if cwd:

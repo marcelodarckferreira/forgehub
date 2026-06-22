@@ -28,6 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TerminalPane } from "@/components/TerminalPane";
 import { Markdown } from "@/components/Markdown";
 import { WorkingDirPicker } from "@/components/WorkingDirPicker";
+import { apiClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAgents, type Agent } from "@/hooks/useAgent";
 import { useClickOutside } from "@/hooks/useClickOutside";
@@ -44,6 +45,13 @@ import {
 } from "@/hooks/useChat";
 
 const HISTORY_COLLAPSE_STORAGE_KEY = "forgehub-chat-history-collapsed";
+// Tabs/active-tab are persisted (not just in-memory state) so that
+// navigating to another page and back to Chat recreates the same tabs with
+// the same ids -- TerminalPane then reconnects using those ids as its tmux
+// session name, re-attaching to the still-running session instead of
+// losing it. See TerminalPane.tsx and host-bridge/app.py's terminal_ws.
+const TERMINAL_TABS_STORAGE_KEY = "forgehub-chat-terminal-tabs";
+const ACTIVE_TAB_STORAGE_KEY = "forgehub-chat-active-tab";
 
 interface TerminalTab {
   id: string;
@@ -326,13 +334,30 @@ export default function ChatPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(
     () => localStorage.getItem(HISTORY_COLLAPSE_STORAGE_KEY) === "1"
   );
-  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([]);
-  const [activeTab, setActiveTab] = useState<string>("chat");
+  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>(() => {
+    try {
+      const raw = localStorage.getItem(TERMINAL_TABS_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as TerminalTab[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activeTab, setActiveTab] = useState<string>(
+    () => localStorage.getItem(ACTIVE_TAB_STORAGE_KEY) ?? "chat"
+  );
   const [workingDir, setWorkingDir] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     localStorage.setItem(HISTORY_COLLAPSE_STORAGE_KEY, historyCollapsed ? "1" : "0");
   }, [historyCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(TERMINAL_TABS_STORAGE_KEY, JSON.stringify(terminalTabs));
+  }, [terminalTabs]);
+
+  useEffect(() => {
+    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   function openTerminalTab(label: string, command?: string) {
     const id = crypto.randomUUID();
@@ -343,6 +368,10 @@ export default function ChatPage() {
   function closeTerminalTab(id: string) {
     setTerminalTabs((tabs) => tabs.filter((t) => t.id !== id));
     setActiveTab((current) => (current === id ? "chat" : current));
+    // Fire-and-forget: this is the one place a tab's session should
+    // actually end, as opposed to every other disconnect (tab switch,
+    // navigating away), which only detaches and leaves it running.
+    apiClient.post(`/api/v1/terminal/sessions/${id}/kill`).catch(() => {});
   }
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -753,7 +782,7 @@ export default function ChatPage() {
 
           {terminalTabs.map((t) => (
             <div key={t.id} className={cn("absolute inset-0 p-2", activeTab !== t.id && "hidden")}>
-              <TerminalPane command={t.command} cwd={t.cwd} active={activeTab === t.id} />
+              <TerminalPane sessionId={t.id} command={t.command} cwd={t.cwd} active={activeTab === t.id} />
             </div>
           ))}
         </div>

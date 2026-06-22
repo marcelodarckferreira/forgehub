@@ -30,9 +30,7 @@ import json
 import os
 import pty
 import re
-import shlex
 import shutil
-import signal
 import struct
 import subprocess
 import tempfile
@@ -512,31 +510,6 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
-def _write_without_echo(fd: int, data: bytes) -> None:
-    """Write to the PTY master with the line discipline's ECHO bit cleared,
-    so the injected cd/launcher line is processed (bash still reads and runs
-    it) but never appears in the terminal output -- the click should look
-    like the session started already-positioned, not like someone typed it.
-    Bash's own readline resets terminal attributes once it starts reading
-    the next real command, so ECHO is restored implicitly after that.
-
-    Note: readline echoes what it reads itself, independent of this kernel
-    ECHO flag, so the launcher line typically still becomes briefly visible
-    once readline starts up -- this doesn't fully hide it, but it's left in
-    place because the alternative (running the launcher as a script before
-    the interactive shell starts) traded a harmless cosmetic echo for a
-    silent failure mode: no fallback shell prompt at all if the launcher
-    hangs or fails to render. A visible prompt the user can see and type
-    into is more important than hiding one extra echoed line."""
-    attrs = termios.tcgetattr(fd)
-    original_lflag = attrs[3]
-    attrs[3] = original_lflag & ~termios.ECHO
-    termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    os.write(fd, data)
-    attrs[3] = original_lflag
-    termios.tcsetattr(fd, termios.TCSANOW, attrs)
-
-
 class DirEntry(BaseModel):
     name: str
     path: str
@@ -582,44 +555,75 @@ async def browse_dirs(
     return BrowseDirsResponse(path=str(target), parent=parent, entries=entries)
 
 
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _tmux(*args: str, timeout: int = 10) -> subprocess.CompletedProcess:
+    return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def _tmux_session_exists(name: str) -> bool:
+    return _tmux("has-session", "-t", name).returncode == 0
+
+
+@app.post("/v1/terminal/sessions/{session_id}/kill")
+async def kill_terminal_session(session_id: str, x_bridge_token: str | None = Header(default=None)) -> dict:
+    """Fully ends a terminal tab's session (vs. just disconnecting the
+    WebSocket, which only detaches -- see terminal_ws). Called when the user
+    explicitly closes a tab in the UI."""
+    _check_token(x_bridge_token)
+    if not SESSION_ID_RE.match(session_id):
+        raise HTTPException(status_code=422, detail="Invalid session id")
+    _tmux("kill-session", "-t", f"forgehub-{session_id}")
+    return {"status": "ok"}
+
+
 @app.websocket("/v1/terminal/ws")
 async def terminal_ws(
     websocket: WebSocket,
     token: str = Query(...),
+    session: str = Query(...),
     command: str | None = Query(default=None),
     cwd: str | None = Query(default=None),
 ) -> None:
-    if token != BRIDGE_TOKEN:
+    if token != BRIDGE_TOKEN or not SESSION_ID_RE.match(session):
         await websocket.close(code=4401)
         return
     await websocket.accept()
 
     home = str(Path.home())
+    # Each terminal tab maps 1:1 to a tmux session named after the tab's id,
+    # namespaced so it can't collide with unrelated tmux sessions on the
+    # host. Reusing an existing session (rather than always spawning a fresh
+    # shell) is what makes reconnecting after a navigation/disconnect resume
+    # a running CLI agent instead of losing it -- see terminal_ws's finally
+    # block, which only detaches on disconnect, never kills the session.
+    session_name = f"forgehub-{session}"
+    is_new = not _tmux_session_exists(session_name)
+    if is_new:
+        # -c sets the pane's starting directory directly (no typed `cd`
+        # needed, so no risk of it ever flashing on screen on first attach).
+        _tmux("new-session", "-d", "-s", session_name, "-x", "80", "-y", "24", "-c", cwd or home)
+        if command in LAUNCHER_COMMANDS:
+            # Only on creation -- reattaching to an existing session must
+            # never re-type the launcher, or every reconnect would relaunch
+            # claude/codex/agy on top of whatever's already running.
+            _tmux("send-keys", "-t", session_name, "-l", command)
+            _tmux("send-keys", "-t", session_name, "Enter")
+
     master_fd, slave_fd = pty.openpty()
     _set_winsize(master_fd, 24, 80)
 
     proc = subprocess.Popen(
-        ["/bin/bash", "-l"],
+        ["tmux", "attach-session", "-t", session_name],
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,
-        cwd=home,
         env={**os.environ, "TERM": "xterm-256color"},
-        preexec_fn=os.setsid,
         close_fds=True,
     )
     os.close(slave_fd)  # the child has its own copy; the parent doesn't need this end
     fd = master_fd
-
-    # Typed into the shell rather than passed as Popen(cwd=...) so an
-    # invalid path behaves exactly like a real terminal ("cd: no such file
-    # or directory") instead of failing the whole connection. Written with
-    # echo off so the line itself doesn't show up above the prompt -- only
-    # its output (errors, the launcher's own banner) does.
-    if cwd:
-        _write_without_echo(fd, f"cd {shlex.quote(cwd)}\n".encode())
-    if command in LAUNCHER_COMMANDS:
-        _write_without_echo(fd, f"{command}\n".encode())
 
     loop = asyncio.get_event_loop()
     output_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -665,18 +669,20 @@ async def terminal_ws(
         pass
     finally:
         output_task.cancel()
+        # Only end *our* `tmux attach-session` client, never the session
+        # itself -- the pane (and whatever's running inside it, claude/codex/
+        # antigravity/...) belongs to the tmux server, a separate long-lived
+        # process, and keeps running so a later reconnect with the same
+        # session id can resume it. Explicit kill is a separate endpoint
+        # (kill_terminal_session) for when the user actually closes the tab.
         try:
-            # Interactive bash ignores SIGTERM (confirmed via /proc/<pid>/status
-            # SigIgn during testing) -- SIGKILL is the only signal guaranteed to
-            # land. setsid made the shell its own process group leader, so this
-            # also kills anything it spawned (claude/codex/antigravity, ...).
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.wait(timeout=5)
-        except (subprocess.TimeoutExpired, ProcessLookupError):
-            pass
+            proc.terminate()
+            proc.wait(timeout=3)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
         try:
             os.close(fd)
         except OSError:

@@ -7,8 +7,14 @@ const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? "http:/
 const WS_BASE = API_BASE.replace(/^http/, "ws");
 
 interface TerminalPaneProps {
+  /** Stable id for this tab (the tmux session name on the host) -- reusing
+   * the same id across reconnects (e.g. after navigating away and back) is
+   * what lets the host-bridge re-attach to the same tmux session instead of
+   * starting a new shell, so the running process survives the round trip. */
+  sessionId: string;
   /** Launcher to type into the shell once it's up (e.g. "claude"), or
-   * undefined for a plain bash session. */
+   * undefined for a plain bash session. Only applied when the host-bridge
+   * creates the session for the first time -- ignored on reattach. */
   command?: string;
   /** Host directory to `cd` into before the launcher (or the bare shell)
    * starts -- see WorkingDirPicker. */
@@ -18,7 +24,7 @@ interface TerminalPaneProps {
   active: boolean;
 }
 
-export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
+export function TerminalPane({ sessionId, command, cwd, active }: TerminalPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -40,6 +46,7 @@ export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
     termRef.current = term;
 
     const params = new URLSearchParams();
+    params.set("session", sessionId);
     if (command) params.set("command", command);
     if (cwd) params.set("cwd", cwd);
     const ws = new WebSocket(`${WS_BASE}/api/v1/terminal/ws?${params.toString()}`);
@@ -117,7 +124,7 @@ export function TerminalPane({ command, cwd, active }: TerminalPaneProps) {
       ws.close();
       term.dispose();
     };
-    // command/cwd are fixed for the lifetime of a tab -- only mount/unmount matters.
+    // sessionId/command/cwd are fixed for the lifetime of a tab -- only mount/unmount matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
