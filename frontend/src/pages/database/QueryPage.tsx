@@ -55,7 +55,7 @@ function ResultsTable({ result }: { result: QueryResult }) {
 
   return (
     <>
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border bg-muted/20 sticky top-0 z-10">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border bg-card sticky top-0 z-10">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
         <span className="text-xs text-muted-foreground flex-1">
           {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
@@ -67,9 +67,9 @@ function ResultsTable({ result }: { result: QueryResult }) {
           <ClipboardCopy className="h-3 w-3" /> {copied ? "Copiado!" : "CSV"}
         </Button>
       </div>
-      <table className="w-full text-xs border-collapse">
+      <table className="w-full min-w-max text-xs border-collapse">
         <thead className="sticky top-[33px] z-10">
-          <tr className="bg-muted/80">
+          <tr className="bg-muted">
             <th className="px-3 py-2 text-left font-medium text-muted-foreground border-b border-border w-10 text-right">#</th>
             {result.columns.map((col) => (
               <th key={col} className="px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono whitespace-nowrap">
@@ -83,11 +83,11 @@ function ResultsTable({ result }: { result: QueryResult }) {
             <tr key={i} className="hover:bg-muted/30 transition-colors">
               <td className="px-3 py-1.5 text-muted-foreground/50 text-right font-mono">{i + 1}</td>
               {row.map((cell, j) => (
-                <td key={j} className="px-3 py-1.5 font-mono max-w-[280px]">
+                <td key={j} className="px-3 py-1.5 font-mono whitespace-nowrap">
                   {cell === null ? (
                     <span className="italic text-muted-foreground/50">null</span>
                   ) : (
-                    <span className="truncate block" title={String(cell)}>{String(cell)}</span>
+                    <span title={String(cell)}>{String(cell)}</span>
                   )}
                 </td>
               ))}
@@ -273,8 +273,8 @@ export default function QueryPage() {
       )}
       {result && (
         <div
-          className="rounded-lg border border-border overflow-hidden"
-          style={{ maxHeight: "calc(100vh - 340px)", overflowY: "auto" }}
+          className="rounded-lg border border-border"
+          style={{ maxHeight: "calc(100vh - 340px)", overflow: "auto" }}
         >
           <ResultsTable result={result} />
         </div>
