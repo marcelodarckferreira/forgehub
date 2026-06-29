@@ -1,8 +1,10 @@
 import { useState } from "react";
 import {
   AlertCircle,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  ClipboardCopy,
   Code2,
   Eye,
   KeyRound,
@@ -281,6 +283,7 @@ function TablesSection() {
   const [dataResult, setDataResult] = useState<QueryResult | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
+  const [csvCopied, setCsvCopied] = useState(false);
   const dataMut = useExecuteQuery();
   const { data: detail, isLoading: loadingDetail } = useDatabaseTable(selected, schema, instance, db);
 
@@ -379,36 +382,45 @@ function TablesSection() {
             )}
             {dataResult && selected === detail.name && (() => {
               const totalPages = Math.ceil(detail.row_count / PAGE_SIZE);
+              const copyCSV = () => {
+                const header = dataResult.columns.join(",");
+                const body = dataResult.rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+                navigator.clipboard.writeText(`${header}\n${body}`);
+                setCsvCopied(true);
+                setTimeout(() => setCsvCopied(false), 2000);
+              };
               return (
                 <div className="space-y-1.5">
+                  {/* Stats bar — outside scroll container so it stays visible on horizontal scroll */}
+                  <div className="flex items-center gap-2 px-1">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                    <span className="text-xs text-muted-foreground flex-1">
+                      {dataResult.row_count} linha(s) · {dataResult.elapsed_ms.toFixed(1)} ms
+                    </span>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs" onClick={copyCSV}>
+                      <ClipboardCopy className="h-3 w-3" /> {csvCopied ? "Copiado!" : "CSV"}
+                    </Button>
+                    {totalPages > 1 && (
+                      <>
+                        <span className="text-xs text-muted-foreground border-l border-border pl-2">
+                          Página {page + 1} de {totalPages} · {detail.row_count.toLocaleString()} registros
+                        </span>
+                        <Button size="sm" variant="outline" className="h-6 w-6 p-0"
+                          disabled={page === 0 || dataMut.isPending}
+                          onClick={() => handleViewData(detail.name, page - 1)}>
+                          <ChevronLeft className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-6 w-6 p-0"
+                          disabled={page >= totalPages - 1 || dataMut.isPending}
+                          onClick={() => handleViewData(detail.name, page + 1)}>
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </>
+                    )}
+                  </div>
                   <div className="rounded-lg border border-border" style={{ maxHeight: "400px", overflow: "auto" }}>
                     <ResultsTable result={dataResult} />
                   </div>
-                  {totalPages > 1 && (
-                    <div className="flex items-center gap-2 justify-end pt-0.5">
-                      <span className="text-xs text-muted-foreground">
-                        Página {page + 1} de {totalPages} · {detail.row_count.toLocaleString()} registros
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 w-6 p-0"
-                        disabled={page === 0 || dataMut.isPending}
-                        onClick={() => handleViewData(detail.name, page - 1)}
-                      >
-                        <ChevronLeft className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-6 w-6 p-0"
-                        disabled={page >= totalPages - 1 || dataMut.isPending}
-                        onClick={() => handleViewData(detail.name, page + 1)}
-                      >
-                        <ChevronRight className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  )}
                 </div>
               );
             })()}

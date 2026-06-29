@@ -45,7 +45,6 @@ function ValidationIcon({ state, error }: { state: ValidationState; error: strin
 }
 
 export function ResultsTable({ result }: { result: QueryResult }) {
-  const [copied, setCopied] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [colWidths, setColWidths] = useState<Record<string, number>>({});
@@ -95,33 +94,8 @@ export function ResultsTable({ result }: { result: QueryResult }) {
     window.addEventListener("mouseup", onUp);
   };
 
-  const copyCSV = () => {
-    const header = result.columns.join(",");
-    const body = sortedRows
-      .map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    navigator.clipboard.writeText(`${header}\n${body}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
   return (
     <>
-      {/* Stats + CSV bar */}
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border sticky top-0 z-20"
-           style={{ backgroundColor: "hsl(var(--card))" }}>
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-        <span className="text-xs text-muted-foreground flex-1">
-          {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
-          {result.truncated && (
-            <span className="ml-2 text-amber-600 font-medium">(truncado em 1000 linhas)</span>
-          )}
-        </span>
-        <Button size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs" onClick={copyCSV}>
-          <ClipboardCopy className="h-3 w-3" /> {copied ? "Copiado!" : "CSV"}
-        </Button>
-      </div>
-
       {/* Data table */}
       <table className="text-xs border-collapse" style={{ minWidth: "100%", width: "max-content" }}>
         <thead className="sticky top-[33px] z-10">
@@ -196,6 +170,7 @@ export default function QueryPage() {
   const [validationState, setValidationState] = useState<ValidationState>("idle");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [sqlCopied, setSqlCopied] = useState(false);
+  const [csvCopied, setCsvCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executeMut = useExecuteQuery();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -340,9 +315,30 @@ export default function QueryPage() {
         </div>
       )}
       {result && (
-        <div className="rounded-lg border border-border" style={{ maxHeight: "calc(100vh - 340px)", overflow: "auto" }}>
-          <ResultsTable result={result} />
-        </div>
+        <>
+          <div className="flex items-center gap-2 px-1 -mb-1">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+            <span className="text-xs text-muted-foreground flex-1">
+              {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
+              {result.truncated && <span className="ml-2 text-amber-600 font-medium">(truncado em 1000 linhas)</span>}
+            </span>
+            <Button
+              size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs"
+              onClick={() => {
+                const header = result.columns.join(",");
+                const body = result.rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+                navigator.clipboard.writeText(`${header}\n${body}`);
+                setCsvCopied(true);
+                setTimeout(() => setCsvCopied(false), 2000);
+              }}
+            >
+              <ClipboardCopy className="h-3 w-3" /> {csvCopied ? "Copiado!" : "CSV"}
+            </Button>
+          </div>
+          <div className="rounded-lg border border-border" style={{ maxHeight: "calc(100vh - 370px)", overflow: "auto" }}>
+            <ResultsTable result={result} />
+          </div>
+        </>
       )}
     </div>
   );
