@@ -44,7 +44,7 @@ function ValidationIcon({ state, error }: { state: ValidationState; error: strin
   return null;
 }
 
-function ResultsTable({ result }: { result: QueryResult }) {
+export function ResultsTable({ result }: { result: QueryResult }) {
   const [copied, setCopied] = useState(false);
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");

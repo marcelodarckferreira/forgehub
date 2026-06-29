@@ -1,14 +1,13 @@
 import { useState } from "react";
 import {
   AlertCircle,
-  CheckCircle2,
   ChevronRight,
   Code2,
+  Eye,
   KeyRound,
   Link2,
   Loader2,
   Pencil,
-  Play,
   Plus,
   RefreshCw,
   Search,
@@ -39,8 +38,10 @@ import {
   type FunctionSummary,
   type IndexGlobal,
   type ColumnDef,
+  type QueryResult,
 } from "@/hooks/useDatabase";
 import { useSchema } from "./SchemaContext";
+import { ResultsTable } from "./QueryPage";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -265,71 +266,6 @@ function CreateIndexPanel({ tables, onClose, onCreated }: { tables: string[]; on
 }
 
 // ---------------------------------------------------------------------------
-// Data viewer (inline SELECT)
-// ---------------------------------------------------------------------------
-
-function DataViewer({ table, schema, instance, db }: { table: string; schema: string; instance: string; db: string }) {
-  const query = useExecuteQuery();
-  const [ran, setRan] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = async () => {
-    setError(null);
-    try {
-      await query.mutateAsync({ sql: `SELECT * FROM "${schema}"."${table}" LIMIT 100`, limit: 100, instance, db });
-      setRan(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  if (!ran && !query.isPending) {
-    return (
-      <div className="flex items-center gap-2 py-3">
-        <Button size="sm" variant="outline" onClick={run} className="gap-1.5 text-xs">
-          <Play className="h-3.5 w-3.5" /> Carregar dados (LIMIT 100)
-        </Button>
-      </div>
-    );
-  }
-
-  if (query.isPending) return <div className="flex items-center gap-2 py-3 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Consultando...</div>;
-  if (error) return <p className="text-xs text-destructive py-2">{error}</p>;
-  if (!query.data) return null;
-
-  const { columns, rows, row_count } = query.data;
-  return (
-    <div>
-      <div className="flex items-center gap-2 mb-2">
-        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-        <span className="text-xs text-muted-foreground">{row_count} linha(s)</span>
-        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs ml-auto" onClick={run}><RefreshCw className="h-3 w-3 mr-1" /> Atualizar</Button>
-      </div>
-      <div className="rounded border border-border overflow-auto" style={{ maxHeight: 280 }}>
-        <table className="w-full text-xs border-collapse">
-          <thead className="sticky top-0 bg-muted/80 z-10">
-            <tr>
-              {columns.map((c) => <th key={c} className="px-2 py-1.5 text-left font-mono font-medium border-b border-border whitespace-nowrap">{c}</th>)}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/40">
-            {rows.map((row, i) => (
-              <tr key={i} className="hover:bg-muted/20">
-                {row.map((cell, j) => (
-                  <td key={j} className="px-2 py-1 font-mono max-w-[200px] truncate">
-                    {cell === null ? <span className="italic text-muted-foreground/40">null</span> : String(cell)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Tables section
 // ---------------------------------------------------------------------------
 
@@ -339,8 +275,28 @@ function TablesSection() {
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
-  const [showData, setShowData] = useState(false);
+  const [dataResult, setDataResult] = useState<QueryResult | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
+  const dataMut = useExecuteQuery();
   const { data: detail, isLoading: loadingDetail } = useDatabaseTable(selected, schema, instance, db);
+
+  const handleViewData = async (tableName: string) => {
+    setSelected(tableName);
+    setDataResult(null);
+    setDataError(null);
+    try {
+      const r = await dataMut.mutateAsync({
+        sql: `SELECT * FROM "${schema}"."${tableName}" LIMIT 500`,
+        limit: 500,
+        instance,
+        db,
+        schema,
+      });
+      setDataResult(r);
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const filtered = tables.filter((t) => t.name.toLowerCase().includes(search.toLowerCase()));
 
@@ -364,12 +320,27 @@ function TablesSection() {
         <div className="flex-1 overflow-y-auto py-0.5">
           {isLoading ? <div className="flex justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
             : filtered.map((t) => (
-              <button key={t.name} type="button" onClick={() => { setSelected(t.name); setShowData(false); }}
-                className={cn("w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left hover:bg-accent transition-colors", selected === t.name && "bg-accent")}>
-                <Table2 className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span className="flex-1 text-[11px] font-mono truncate">{t.name}</span>
-                <span className="text-[9px] text-muted-foreground shrink-0">{t.row_count}</span>
-              </button>
+              <div key={t.name} className={cn("group flex items-center hover:bg-accent transition-colors", selected === t.name && "bg-accent")}>
+                <button
+                  type="button"
+                  onClick={() => { setSelected(t.name); setDataResult(null); setDataError(null); }}
+                  className="flex-1 flex items-center gap-1.5 px-2.5 py-1.5 text-left min-w-0 overflow-hidden"
+                >
+                  <Table2 className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 text-[11px] font-mono truncate">{t.name}</span>
+                  <span className="text-[9px] text-muted-foreground shrink-0">{t.row_count}</span>
+                </button>
+                {t.row_count > 0 && (
+                  <button
+                    type="button"
+                    title="Visualizar dados"
+                    onClick={() => handleViewData(t.name)}
+                    className="shrink-0 p-1.5 pr-2 text-muted-foreground hover:text-foreground hover:bg-muted/60 rounded transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <Eye className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
             ))}
         </div>
       </div>
@@ -385,17 +356,26 @@ function TablesSection() {
           <div className="flex justify-center py-12"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
         ) : detail ? (
           <div className="space-y-5 max-w-3xl">
-            <div className="flex items-start justify-between">
-              <div>
-                <h2 className="text-base font-mono font-bold">{detail.name}</h2>
-                <p className="text-xs text-muted-foreground">company.{detail.name} · {detail.row_count.toLocaleString()} rows · {detail.columns.length} cols</p>
-              </div>
-              <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => setShowData((v) => !v)}>
-                <Play className="h-3.5 w-3.5" /> {showData ? "Ocultar dados" : "Consultar dados"}
-              </Button>
+            <div>
+              <h2 className="text-base font-mono font-bold">{detail.name}</h2>
+              <p className="text-xs text-muted-foreground">company.{detail.name} · {detail.row_count.toLocaleString()} rows · {detail.columns.length} cols</p>
             </div>
 
-            {showData && <DataViewer table={detail.name} schema={schema} instance={instance} db={db} />}
+            {dataMut.isPending && selected === detail.name && (
+              <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando dados…
+              </div>
+            )}
+            {dataError && selected === detail.name && (
+              <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive font-mono whitespace-pre-wrap">
+                {dataError}
+              </div>
+            )}
+            {dataResult && selected === detail.name && (
+              <div className="rounded-lg border border-border" style={{ maxHeight: "400px", overflow: "auto" }}>
+                <ResultsTable result={dataResult} />
+              </div>
+            )}
 
             {/* Columns */}
             <div>
