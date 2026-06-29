@@ -108,7 +108,8 @@ export function ResultsTable({ result }: { result: QueryResult }) {
   return (
     <>
       {/* Stats + CSV bar */}
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border bg-card sticky top-0 z-10">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border sticky top-0 z-20"
+           style={{ backgroundColor: "hsl(var(--card))" }}>
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
         <span className="text-xs text-muted-foreground flex-1">
           {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
@@ -126,14 +127,15 @@ export function ResultsTable({ result }: { result: QueryResult }) {
         <thead className="sticky top-[33px] z-10">
           <tr>
             {/* Row number column — not sortable/resizable */}
-            <th className="px-3 py-2 font-medium text-muted-foreground border-b border-border text-right select-none w-10 bg-muted">
+            <th className="px-3 py-2 font-medium text-muted-foreground border-b border-border text-right select-none w-10"
+                style={{ backgroundColor: "hsl(var(--muted))" }}>
               #
             </th>
             {result.columns.map((col) => (
               <th
                 key={col}
-                className="relative px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono cursor-pointer select-none group bg-muted"
-                style={colWidths[col] ? { width: colWidths[col], minWidth: colWidths[col] } : undefined}
+                className="relative px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono cursor-pointer select-none group"
+                style={{ backgroundColor: "hsl(var(--muted))", ...(colWidths[col] ? { width: colWidths[col], minWidth: colWidths[col] } : {}) }}
                 onClick={() => handleSort(col)}
               >
                 <span className="flex items-center gap-1 pr-3 whitespace-nowrap">
