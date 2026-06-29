@@ -290,7 +290,7 @@ export default function QueryPage() {
                 type="button"
                 title="Limpar editor"
                 onClick={() => { setSql(""); setResult(null); setQueryError(null); }}
-                className="p-1 rounded text-emerald-500 hover:text-emerald-400 hover:bg-muted/60 transition-colors"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
               >
                 <Eraser className="h-3.5 w-3.5" />
               </button>
