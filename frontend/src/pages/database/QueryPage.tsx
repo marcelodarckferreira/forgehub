@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowUpDown,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -192,9 +193,17 @@ export default function QueryPage() {
   const [queryError, setQueryError] = useState<string | null>(null);
   const [validationState, setValidationState] = useState<ValidationState>("idle");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [sqlCopied, setSqlCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executeMut = useExecuteQuery();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const copySql = () => {
+    if (!sql) return;
+    navigator.clipboard.writeText(sql);
+    setSqlCopied(true);
+    setTimeout(() => setSqlCopied(false), 2000);
+  };
 
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
@@ -264,18 +273,28 @@ export default function QueryPage() {
             onKeyDown={handleKeyDown}
             rows={7}
             placeholder="SELECT * FROM company.products LIMIT 10"
-            className="font-mono text-xs resize-none bg-muted/30 border-border focus:ring-1 focus:ring-ring pr-8"
+            className="font-mono text-xs resize-none bg-muted/30 border-border focus:ring-1 focus:ring-ring pr-16"
             spellCheck={false}
           />
           {sql && (
-            <button
-              type="button"
-              title="Limpar editor"
-              onClick={() => { setSql(""); setResult(null); setQueryError(null); }}
-              className="absolute top-2 right-2 p-1 rounded text-emerald-500 hover:text-emerald-400 hover:bg-muted/60 transition-colors"
-            >
-              <Eraser className="h-3.5 w-3.5" />
-            </button>
+            <div className="absolute top-2 right-2 flex gap-0.5">
+              <button
+                type="button"
+                title={sqlCopied ? "Copiado!" : "Copiar query"}
+                onClick={copySql}
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              >
+                {sqlCopied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                title="Limpar editor"
+                onClick={() => { setSql(""); setResult(null); setQueryError(null); }}
+                className="p-1 rounded text-emerald-500 hover:text-emerald-400 hover:bg-muted/60 transition-colors"
+              >
+                <Eraser className="h-3.5 w-3.5" />
+              </button>
+            </div>
           )}
         </div>
 
