@@ -47,3 +47,4 @@ from app.db.models.chat import ChatSession, ChatMessage  # noqa: F401
 from app.db.models.toolversions import ToolVersionStatus, ToolSyncSetting  # noqa: F401
 from app.db.models.cron_script import CronScript  # noqa: F401
 from app.db.models.deploy import DeployInstallation  # noqa: F401
+from app.db.models.user import User  # noqa: F401

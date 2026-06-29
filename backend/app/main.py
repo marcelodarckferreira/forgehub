@@ -13,6 +13,8 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import settings
+
 from app.api.routes import (
     agent,
     artifact,
@@ -32,6 +34,7 @@ from app.api.routes import (
     task,
     terminal,
     toolversions,
+    users,
     vault,
 )
 
@@ -76,6 +79,7 @@ app.include_router(vault.router)
 app.include_router(cron_scripts.router)
 app.include_router(deploy.router)
 app.include_router(database.router)
+app.include_router(users.router)
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
@@ -103,6 +107,34 @@ async def _tool_version_poll_loop() -> None:
         except Exception:
             logger.exception("Tool version poll failed")
         await asyncio.sleep(TOOL_VERSION_POLL_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _bootstrap_admin() -> None:
+    """Ensure at least one admin user exists — uses DEV_USER settings."""
+    from sqlalchemy import select
+    from app.core.security import hash_password
+    from app.db.base import AsyncSessionLocal
+    from app.db.models.user import User
+
+    async with AsyncSessionLocal() as db:
+        try:
+            result = await db.execute(
+                select(User).where(User.username == settings.DEV_USER_USERNAME)
+            )
+            if result.scalar_one_or_none() is None:
+                admin = User(
+                    username=settings.DEV_USER_USERNAME,
+                    hashed_password=hash_password(settings.DEV_USER_PASSWORD),
+                    full_name="Admin",
+                    is_admin=True,
+                    is_active=True,
+                )
+                db.add(admin)
+                await db.commit()
+                logger.info("Bootstrap admin created: %s", settings.DEV_USER_USERNAME)
+        except Exception:
+            logger.exception("Bootstrap admin check failed (table may not exist yet)")
 
 
 @app.on_event("startup")

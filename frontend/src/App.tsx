@@ -1,5 +1,7 @@
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route, useLocation } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { useAuthStore } from "@/store/authStore";
+import LoginPage from "@/pages/auth/LoginPage";
 import Dashboard from "@/pages/Dashboard";
 import WorkspacePage from "@/pages/workspace";
 import ProductPage from "@/pages/product";
@@ -28,18 +30,30 @@ import DatabaseLayout from "@/pages/database/DatabaseLayout";
 import DatabaseSchemaPage from "@/pages/database/SchemaPage";
 import DatabaseDiagramPage from "@/pages/database/DiagramPage";
 import DatabaseQueryPage from "@/pages/database/QueryPage";
+import UsersPage from "@/pages/users";
+
+function RequireAuth({ children }: { children: React.ReactNode }) {
+  const token = useAuthStore((s) => s.token);
+  const location = useLocation();
+  if (!token) {
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  }
+  return <>{children}</>;
+}
 
 export default function App() {
   return (
     <Routes>
-      <Route element={<AppLayout />}>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        element={
+          <RequireAuth>
+            <AppLayout />
+          </RequireAuth>
+        }
+      >
         <Route index element={<Dashboard />} />
         <Route path="workspace" element={<WorkspacePage />} />
-
-        {/* DOMAIN ROUTES -- added by wiring step
-            Append one <Route path="<domain>" element={<...Page />} /> per
-            domain below this line. Each domain page lives at
-            src/pages/<domain>/index.tsx and is imported above. */}
         <Route path="product" element={<ProductPage />} />
         <Route path="product/:id" element={<ProductDetail />} />
         <Route path="projects" element={<ProjectPage />} />
@@ -62,6 +76,7 @@ export default function App() {
         <Route path="foundation" element={<FoundationPage />} />
         <Route path="crons" element={<CronsPage />} />
         <Route path="deploy" element={<DeployPage />} />
+        <Route path="users" element={<UsersPage />} />
         <Route path="database" element={<DatabaseLayout />}>
           <Route index element={<DatabaseSchemaPage />} />
           <Route path="schema" element={<DatabaseSchemaPage />} />
