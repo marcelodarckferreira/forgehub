@@ -3,6 +3,7 @@ import {
   AlertCircle,
   CheckCircle2,
   ClipboardCopy,
+  Eraser,
   Loader2,
   Play,
   XCircle,
@@ -23,8 +24,8 @@ interface ValidateResult {
 const EXAMPLES = [
   { label: "Tabelas", sql: "SELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = 'company'\nORDER BY table_name" },
   { label: "Produtos", sql: "SELECT id, name, created_at\nFROM company.products\nORDER BY created_at DESC" },
-  { label: "Projetos", sql: "SELECT p.name, p.status, v.name as version\nFROM company.projects p\nJOIN company.product_versions v ON v.id = p.product_version_id\nORDER BY p.created_at DESC" },
-  { label: "Tasks recentes", sql: "SELECT title, status, created_at\nFROM company.tasks\nORDER BY created_at DESC\nLIMIT 20" },
+  { label: "Projetos", sql: "SELECT p.name, p.status, v.version\nFROM company.projects p\nJOIN company.product_versions v ON v.id = p.product_version_id\nORDER BY p.created_at DESC" },
+  { label: "Tasks recentes", sql: "SELECT title, status, created_at\nFROM company.project_tasks\nORDER BY created_at DESC\nLIMIT 20" },
 ];
 
 type ValidationState = "idle" | "checking" | "valid" | "invalid";
@@ -207,9 +208,19 @@ export default function QueryPage() {
             onKeyDown={handleKeyDown}
             rows={7}
             placeholder="SELECT * FROM company.products LIMIT 10"
-            className="font-mono text-xs resize-none bg-muted/30 border-border focus:ring-1 focus:ring-ring"
+            className="font-mono text-xs resize-none bg-muted/30 border-border focus:ring-1 focus:ring-ring pr-8"
             spellCheck={false}
           />
+          {sql && (
+            <button
+              type="button"
+              title="Limpar editor"
+              onClick={() => { setSql(""); setResult(null); setQueryError(null); }}
+              className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+            >
+              <Eraser className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
 
         {/* Inline syntax error (before execution) */}
