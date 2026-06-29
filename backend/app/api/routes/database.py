@@ -163,6 +163,7 @@ class SchemaOut(BaseModel):
 class QueryRequest(BaseModel):
     sql: str
     limit: int = 500
+    offset: int = 0
     instance: str = "company_postgres"
     db: str = "forgehub"
     schema: str = SCHEMA
@@ -448,9 +449,10 @@ async def execute_query(payload: QueryRequest):
         )
 
     limit = min(payload.limit, _MAX_ROWS)
+    offset = max(0, payload.offset)
 
-    # Wrap in a subquery with LIMIT to cap rows without breaking CTEs
-    safe_sql = f"SELECT * FROM ({sql}) __q LIMIT {limit + 1}"
+    # Wrap in a subquery with LIMIT/OFFSET to cap rows without breaking CTEs
+    safe_sql = f"SELECT * FROM ({sql}) __q LIMIT {limit + 1} OFFSET {offset}"
 
     try:
         t0 = time.perf_counter()

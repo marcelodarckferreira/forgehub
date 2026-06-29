@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   AlertCircle,
+  ChevronLeft,
   ChevronRight,
   Code2,
   Eye,
@@ -269,6 +270,8 @@ function CreateIndexPanel({ tables, onClose, onCreated }: { tables: string[]; on
 // Tables section
 // ---------------------------------------------------------------------------
 
+const PAGE_SIZE = 100;
+
 function TablesSection() {
   const { schema, instance, db } = useSchema();
   const { data: tables = [], isLoading, refetch, isFetching } = useDatabaseTables(schema, instance, db);
@@ -277,17 +280,20 @@ function TablesSection() {
   const [showCreate, setShowCreate] = useState(false);
   const [dataResult, setDataResult] = useState<QueryResult | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const dataMut = useExecuteQuery();
   const { data: detail, isLoading: loadingDetail } = useDatabaseTable(selected, schema, instance, db);
 
-  const handleViewData = async (tableName: string) => {
+  const handleViewData = async (tableName: string, pageNum = 0) => {
     setSelected(tableName);
     setDataResult(null);
     setDataError(null);
+    setPage(pageNum);
     try {
       const r = await dataMut.mutateAsync({
-        sql: `SELECT * FROM "${schema}"."${tableName}" LIMIT 500`,
-        limit: 500,
+        sql: `SELECT * FROM "${schema}"."${tableName}"`,
+        limit: PAGE_SIZE,
+        offset: pageNum * PAGE_SIZE,
         instance,
         db,
         schema,
@@ -323,7 +329,7 @@ function TablesSection() {
               <div key={t.name} className={cn("group flex items-center hover:bg-accent transition-colors", selected === t.name && "bg-accent")}>
                 <button
                   type="button"
-                  onClick={() => { setSelected(t.name); setDataResult(null); setDataError(null); }}
+                  onClick={() => { setSelected(t.name); setDataResult(null); setDataError(null); setPage(0); }}
                   className="flex-1 flex items-center gap-1.5 px-2.5 py-1.5 text-left min-w-0 overflow-hidden"
                 >
                   <Table2 className="h-3 w-3 shrink-0 text-muted-foreground" />
@@ -371,11 +377,41 @@ function TablesSection() {
                 {dataError}
               </div>
             )}
-            {dataResult && selected === detail.name && (
-              <div className="rounded-lg border border-border" style={{ maxHeight: "400px", overflow: "auto" }}>
-                <ResultsTable result={dataResult} />
-              </div>
-            )}
+            {dataResult && selected === detail.name && (() => {
+              const totalPages = Math.ceil(detail.row_count / PAGE_SIZE);
+              return (
+                <div className="space-y-1.5">
+                  <div className="rounded-lg border border-border" style={{ maxHeight: "400px", overflow: "auto" }}>
+                    <ResultsTable result={dataResult} />
+                  </div>
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-2 justify-end pt-0.5">
+                      <span className="text-xs text-muted-foreground">
+                        Página {page + 1} de {totalPages} · {detail.row_count.toLocaleString()} registros
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 w-6 p-0"
+                        disabled={page === 0 || dataMut.isPending}
+                        onClick={() => handleViewData(detail.name, page - 1)}
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 w-6 p-0"
+                        disabled={page >= totalPages - 1 || dataMut.isPending}
+                        onClick={() => handleViewData(detail.name, page + 1)}
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Columns */}
             <div>
