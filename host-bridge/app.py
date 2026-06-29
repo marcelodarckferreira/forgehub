@@ -24,8 +24,10 @@ shell on the host.
 """
 
 import asyncio
+import base64
 import codecs
 import fcntl
+import io
 import json
 import os
 import pty
@@ -34,13 +36,18 @@ import shutil
 import signal
 import struct
 import subprocess
+import tarfile
 import tempfile
 import termios
 import threading
 import time
 from pathlib import Path
 
+import httpx
+import yaml
+
 from fastapi import FastAPI, Header, HTTPException, Query, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 BRIDGE_TOKEN = os.environ["FORGEHUB_BRIDGE_TOKEN"]
@@ -59,6 +66,7 @@ CHAT_TIMEOUT_SECONDS = 600
 SESSION_ID_RE = re.compile(r"session_id:\s*(\S+)")
 
 
+
 def _is_valid_profile(profile: str) -> bool:
     return bool(PROFILE_NAME_RE.match(profile)) and (PROFILES_DIR / profile).is_dir()
 
@@ -71,6 +79,286 @@ app = FastAPI(title="ForgeHub chat bridge")
 def _check_token(x_bridge_token: str | None) -> None:
     if not x_bridge_token or x_bridge_token != BRIDGE_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid or missing bridge token")
+
+
+class ForgeRouterIntegrationRequest(BaseModel):
+    enabled: bool
+    api_key: str = ""
+
+
+@app.put("/v1/tool-integrations/{tool}")
+async def set_forgerouter_integration(tool: str, req: ForgeRouterIntegrationRequest, x_bridge_token: str | None = Header(default=None)) -> dict:
+    """DEPRECATED — use PUT /v1/project-forgerouter for per-project config.
+    This endpoint is kept for backwards compatibility but now rejects requests
+    to prevent accidental global ForgeRouter configuration."""
+    _check_token(x_bridge_token)
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "Global ForgeRouter configuration is no longer supported. "
+            "Use PUT /v1/project-forgerouter with a project_path to configure ForgeRouter "
+            "in the scope of a specific project only."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-project ForgeRouter configuration
+# Config files are written inside the project's working directory, never in
+# global user directories (~/.claude, ~/.codex, etc.).
+#
+# Claude:       {project}/.claude/settings.local.json
+#               Claude Code reads .claude/settings.local.json from the working
+#               directory hierarchy before falling back to the global one.
+#
+# Codex:        {project}/.codex/config.toml
+#               Codex reads a project-local .codex/config.toml from cwd.
+#
+# Antigravity:  {project}/.forgerouter/antigravity.env
+#               Antigravity CLI doesn't natively support proxy config; this
+#               env file documents the required vars and can be sourced by
+#               wrapper scripts. The UI marks this as "env-based".
+# ---------------------------------------------------------------------------
+
+FORGEROUTER_BASE_URL = "http://localhost:2100/v1"
+FORGEROUTER_MODEL = "forgerouter/auto"
+FORGEROUTER_CLAUDE_KEYS = [
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+]
+
+
+class ProjectForgeRouterRequest(BaseModel):
+    project_path: str
+    tools: list[str]  # ["claude", "codex", "antigravity"]
+    enabled: bool
+    api_key: str = ""
+
+
+def _validate_project_path(project_path: str) -> Path:
+    path = Path(project_path)
+    if not path.is_absolute():
+        raise HTTPException(status_code=400, detail=f"project_path must be absolute: {project_path}")
+    if not path.exists():
+        raise HTTPException(status_code=400, detail=f"project_path does not exist: {project_path}")
+    return path
+
+
+def _configure_claude_forgerouter(project_dir: Path, enabled: bool, api_key: str) -> str:
+    claude_dir = project_dir / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = claude_dir / "settings.local.json"
+
+    # Backup before any write
+    if settings_path.exists():
+        backup = claude_dir / "settings.local.json.forgerouter.bak"
+        backup.write_text(settings_path.read_text())
+
+    try:
+        current = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+    except json.JSONDecodeError:
+        current = {}
+
+    env = current.setdefault("env", {})
+    if enabled:
+        env.update({
+            "ANTHROPIC_BASE_URL": FORGEROUTER_BASE_URL,
+            "ANTHROPIC_AUTH_TOKEN": api_key,
+            "ANTHROPIC_MODEL": FORGEROUTER_MODEL,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": FORGEROUTER_MODEL,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": FORGEROUTER_MODEL,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": FORGEROUTER_MODEL,
+            "CLAUDE_CODE_SUBAGENT_MODEL": FORGEROUTER_MODEL,
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+        })
+    else:
+        for key in FORGEROUTER_CLAUDE_KEYS:
+            env.pop(key, None)
+        if not env:
+            current.pop("env", None)
+
+    settings_path.write_text(json.dumps(current, indent=2) + "\n")
+    os.chmod(settings_path, 0o600)
+    return str(settings_path)
+
+
+def _configure_codex_forgerouter(project_dir: Path, enabled: bool, api_key: str) -> str:
+    codex_dir = project_dir / ".codex"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    config_path = codex_dir / "config.toml"
+
+    if enabled:
+        # Backup existing project-level config if present
+        if config_path.exists():
+            backup = codex_dir / "config.toml.forgerouter.bak"
+            backup.write_text(config_path.read_text())
+        config_path.write_text(
+            f'model = "{FORGEROUTER_MODEL}"\n'
+            f'model_provider = "forgerouter"\n'
+            f'[model_providers.forgerouter]\n'
+            f'name = "ForgeRouter"\n'
+            f'base_url = "{FORGEROUTER_BASE_URL}"\n'
+            f'experimental_bearer_token = "{api_key}"\n'
+        )
+        os.chmod(config_path, 0o600)
+    else:
+        # Restore backup if available, otherwise remove
+        backup = codex_dir / "config.toml.forgerouter.bak"
+        if backup.exists():
+            config_path.write_text(backup.read_text())
+            backup.unlink()
+        else:
+            config_path.unlink(missing_ok=True)
+
+    return str(config_path)
+
+
+def _configure_antigravity_forgerouter(project_dir: Path, enabled: bool, api_key: str) -> str:
+    fr_dir = project_dir / ".forgerouter"
+    fr_dir.mkdir(parents=True, exist_ok=True)
+    env_path = fr_dir / "antigravity.env"
+
+    if enabled:
+        env_path.write_text(
+            "# ForgeRouter configuration for Antigravity CLI\n"
+            "# Source this file before running agy in this project:\n"
+            "#   source .forgerouter/antigravity.env\n"
+            "#\n"
+            "# NOTE: Antigravity CLI does not natively support proxy configuration.\n"
+            "# These variables are provided for custom wrapper scripts.\n"
+            f'export FORGEROUTER_BASE_URL="{FORGEROUTER_BASE_URL}"\n'
+            f'export FORGEROUTER_API_KEY="{api_key}"\n'
+            f'export FORGEROUTER_MODEL="{FORGEROUTER_MODEL}"\n'
+        )
+        os.chmod(env_path, 0o600)
+    else:
+        env_path.unlink(missing_ok=True)
+
+    return str(env_path)
+
+
+@app.put("/v1/project-forgerouter")
+async def set_project_forgerouter(
+    req: ProjectForgeRouterRequest,
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Configure ForgeRouter for the specified tools inside a project directory.
+
+    Config files are written inside project_path, never in global user dirs.
+    When enabled=False, config files are removed (or restored from backup).
+    """
+    _check_token(x_bridge_token)
+    project_dir = _validate_project_path(req.project_path)
+
+    results: dict[str, dict] = {}
+    for tool in req.tools:
+        if tool == "claude":
+            config_path = _configure_claude_forgerouter(project_dir, req.enabled, req.api_key)
+            results["claude"] = {"enabled": req.enabled, "config_path": config_path}
+        elif tool == "codex":
+            config_path = _configure_codex_forgerouter(project_dir, req.enabled, req.api_key)
+            results["codex"] = {"enabled": req.enabled, "config_path": config_path}
+        elif tool == "antigravity":
+            config_path = _configure_antigravity_forgerouter(project_dir, req.enabled, req.api_key)
+            results["antigravity"] = {"enabled": req.enabled, "config_path": config_path, "note": "env-based, requires shell sourcing"}
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported tool: {tool}")
+
+    return {"project_path": req.project_path, "tools": results}
+
+
+@app.get("/v1/project-forgerouter/status")
+async def get_project_forgerouter_status(
+    project_path: str,
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Return the live filesystem status of ForgeRouter config files for a project."""
+    _check_token(x_bridge_token)
+    project_dir = _validate_project_path(project_path)
+
+    claude_path = project_dir / ".claude" / "settings.local.json"
+    claude_enabled = False
+    if claude_path.exists():
+        try:
+            s = json.loads(claude_path.read_text())
+            env = s.get("env", {})
+            base_url = env.get("ANTHROPIC_BASE_URL", "")
+            claude_enabled = bool(base_url and ("localhost:2100" in base_url or "forgerouter" in base_url.lower()))
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    codex_path = project_dir / ".codex" / "config.toml"
+    codex_enabled = codex_path.exists() and "forgerouter" in (codex_path.read_text() if codex_path.exists() else "").lower()
+
+    agy_path = project_dir / ".forgerouter" / "antigravity.env"
+    agy_enabled = agy_path.exists()
+
+    return {
+        "project_path": project_path,
+        "claude": claude_enabled,
+        "codex": codex_enabled,
+        "antigravity": agy_enabled,
+        "claude_config_path": str(claude_path),
+        "codex_config_path": str(codex_path),
+        "antigravity_env_path": str(agy_path),
+    }
+
+
+@app.get("/v1/forgerouter/global-audit")
+async def audit_global_forgerouter(
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Scan for global ForgeRouter configurations that should be per-project."""
+    _check_token(x_bridge_token)
+    findings = []
+
+    # Check global Claude settings
+    global_claude = Path.home() / ".claude" / "settings.local.json"
+    if global_claude.exists():
+        try:
+            s = json.loads(global_claude.read_text())
+            env = s.get("env", {})
+            base_url = env.get("ANTHROPIC_BASE_URL", "")
+            if base_url and ("localhost:2100" in base_url or "forgerouter" in base_url.lower()):
+                findings.append({
+                    "tool": "claude",
+                    "type": "global",
+                    "path": str(global_claude),
+                    "detail": f"ANTHROPIC_BASE_URL={base_url}",
+                })
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # Check global Codex forgerouter config (old format: forgerouter.config.toml)
+    global_codex_fr = Path.home() / ".codex" / "forgerouter.config.toml"
+    if global_codex_fr.exists():
+        findings.append({
+            "tool": "codex",
+            "type": "global",
+            "path": str(global_codex_fr),
+            "detail": "Legacy global forgerouter.config.toml detected",
+        })
+
+    # Check global Codex config.toml for forgerouter model provider
+    # Check global Codex config.toml for actual ForgeRouter model routing
+    # (trust_level entries for paths containing "forgerouter" are not routing config)
+    global_codex_cfg = Path.home() / ".codex" / "config.toml"
+    if global_codex_cfg.exists():
+        try:
+            content = global_codex_cfg.read_text()
+            if 'model_provider = "forgerouter"' in content or 'model_provider="forgerouter"' in content:
+                findings.append({
+                    "tool": "codex",
+                    "type": "global",
+                    "path": str(global_codex_cfg),
+                    "detail": "Global config.toml sets model_provider = forgerouter",
+                })
+        except OSError:
+            pass
+
+    return {"clean": len(findings) == 0, "findings": findings}
 
 
 class ChatRequest(BaseModel):
@@ -141,6 +429,128 @@ async def chat(req: ChatRequest, x_bridge_token: str | None = Header(default=Non
     return _run_hermes_chat(req)
 
 
+def _load_profile_llm_config(profile: str) -> dict:
+    """Read ForgeRouter URL, API key, and model from the profile's config.yaml."""
+    cfg_path = PROFILES_DIR / profile / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text())
+    model_cfg = cfg.get("model", {})
+    base_url = model_cfg.get("base_url", "http://localhost:2100/v1").rstrip("/")
+    api_key = model_cfg.get("api_key", "")
+    model_id = (model_cfg.get("main") or {}).get("model") or model_cfg.get("default", "forgerouter/auto")
+    soul_file = PROFILES_DIR / profile / "SOUL.md"
+    system_prompt = soul_file.read_text() if soul_file.exists() else ""
+    return {"base_url": base_url, "api_key": api_key, "model": model_id, "system_prompt": system_prompt}
+
+
+VOICE_MODEL = "cerebras/gpt-oss-120b"  # fast inference chip, consistent ~1.3s cold+warm
+
+
+async def _direct_stream(profile: str, message: str, history: list) -> StreamingResponse:
+    """Fast path: call ForgeRouter/LLM directly — no subprocess, ~1.5s to first token."""
+    cfg = _load_profile_llm_config(profile)
+    messages = [{"role": "system", "content": cfg["system_prompt"]}] + history + [{"role": "user", "content": message}]
+
+    async def event_stream():
+        full_reply = ""
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{cfg['base_url']}/chat/completions",
+                    json={"model": VOICE_MODEL, "messages": messages, "stream": True, "max_tokens": 500},
+                    headers={"Authorization": f"Bearer {cfg['api_key']}"},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        if raw == "[DONE]":
+                            break
+                        try:
+                            data = json.loads(raw)
+                            delta = data["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                full_reply += delta
+                                yield f'data: {json.dumps({"delta": delta})}\n\n'
+                        except Exception:
+                            pass
+        except Exception as exc:
+            yield f'data: {json.dumps({"error": str(exc)})}\n\n'
+            return
+        yield f'data: {json.dumps({"done": True, "session_id": None, "reply": full_reply})}\n\n'
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/v1/chat/stream")
+async def chat_stream(
+    profile: str,
+    message: str,
+    session_id: str | None = None,
+    history: str | None = None,  # JSON array of {role,content} — enables direct ForgeRouter path
+    x_bridge_token: str | None = Header(default=None),
+) -> StreamingResponse:
+    """SSE endpoint — streams token deltas from the agent.
+
+    Fast path (voice): when `history` is provided, calls ForgeRouter directly (~2s first token).
+    Slow path (text): hermes_stream.py subprocess with full agent capabilities (~16s first token).
+    """
+    _check_token(x_bridge_token)
+    if not _is_valid_profile(profile):
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile}")
+
+    if history is not None:
+        return await _direct_stream(profile, message, json.loads(history))
+
+    # Subprocess path (full Hermes agent with tools, memory, etc.)
+    profile_home = str(PROFILES_DIR / profile)
+    helper = str(Path(__file__).parent / "hermes_stream.py")
+    cmd = [HERMES_PYTHON, "-u", helper, "--profile-home", profile_home, "--message", message]
+    if session_id:
+        cmd += ["--session-id", session_id]
+
+    async def event_stream():
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env={**os.environ, "HERMES_HOME": profile_home, "HERMES_SESSION_SOURCE": "tool"},
+        )
+        try:
+            while True:
+                line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=660)  # type: ignore[union-attr]
+                if not line_bytes:
+                    break
+                line = line_bytes.decode().strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if data.get("done") or data.get("error"):
+                    yield f"data: {line}\n\n"
+                    break
+                yield f"data: {line}\n\n"
+        except asyncio.TimeoutError:
+            yield f'data: {json.dumps({"error": "agent timeout"})}\n\n'
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/v1/chat-with-image", response_model=ChatResponse)
 async def chat_with_image(
     profile: str = Form(...),
@@ -197,6 +607,52 @@ async def transcribe(
         return {"text": text}
     finally:
         os.unlink(tmp_path)
+
+
+PIPER_MODEL = Path("/root/.local/share/piper/models/pt_BR-faber-medium/pt_BR-faber-medium.onnx")
+PIPER_SAMPLE_RATE = 22050
+
+
+@app.post("/v1/tts")
+async def text_to_speech(
+    payload: dict,
+    x_bridge_token: str | None = Header(default=None),
+):
+    """Synthesise text with Piper (pt_BR-faber-medium) and return a WAV file."""
+    _check_token(x_bridge_token)
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        from fastapi import Response as FResponse
+        return FResponse(content=b"", media_type="audio/wav")
+
+    proc = await asyncio.create_subprocess_exec(
+        "piper",
+        "-m", str(PIPER_MODEL),
+        "--output-raw",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        raw_pcm, _ = await asyncio.wait_for(proc.communicate(input=text.encode()), timeout=30)
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise HTTPException(status_code=504, detail="Piper TTS timeout")
+
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(PIPER_SAMPLE_RATE)
+        wf.writeframes(raw_pcm)
+    buf.seek(0)
+    from fastapi import Response as FResponse
+    return FResponse(content=buf.read(), media_type="audio/wav")
 
 
 @app.post("/v1/terminal/upload-image")
@@ -426,6 +882,13 @@ TOOL_CHECKS = {
     "claude": lambda: _check_npm_backed("/root/.local/bin/claude", r"^(\S+)\s*\(Claude Code\)", "@anthropic-ai/claude-code"),
     "codex": lambda: _check_npm_backed("/root/.npm-global/bin/codex", r"codex-cli (\S+)", "@openai/codex"),
     "antigravity": _check_antigravity,
+    # pi and opencode both print a bare version string ("0.80.2") with no
+    # surrounding label, and both are also published to the npm registry
+    # under a different name than their binary (pi: @earendil-works/
+    # pi-coding-agent; opencode: opencode-ai) -- same npm-diff strategy as
+    # claude/codex above, just with a simpler capture pattern.
+    "pi": lambda: _check_npm_backed("/root/.npm-global/bin/pi", r"(\d+\.\d+\.\d+)", "@earendil-works/pi-coding-agent"),
+    "opencode": lambda: _check_npm_backed("/root/.opencode/bin/opencode", r"(\d+\.\d+\.\d+)", "opencode-ai"),
 }
 
 TOOL_UPDATE_COMMANDS = {
@@ -433,6 +896,10 @@ TOOL_UPDATE_COMMANDS = {
     "claude": ["/root/.local/bin/claude", "update"],
     "codex": ["/root/.npm-global/bin/codex", "update"],
     "antigravity": ["/root/.local/bin/agy", "update"],
+    # Both have a built-in self-update subcommand that no-ops cleanly (exit
+    # 0, no prompt) when already current.
+    "pi": ["/root/.npm-global/bin/pi", "update"],
+    "opencode": ["/root/.opencode/bin/opencode", "upgrade"],
 }
 
 
@@ -504,7 +971,7 @@ async def update_tool(req: ToolUpdateRequest, x_bridge_token: str | None = Heade
 # terminal instead of needing special-cased error handling here.
 # ---------------------------------------------------------------------------
 
-LAUNCHER_COMMANDS = {"hermes", "claude", "codex", "agy"}
+LAUNCHER_COMMANDS = {"hermes", "claude", "codex", "agy", "pi", "opencode"}
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
@@ -605,6 +1072,12 @@ async def terminal_ws(
         # -c sets the pane's starting directory directly (no typed `cd`
         # needed, so no risk of it ever flashing on screen on first attach).
         _tmux("new-session", "-d", "-s", session_name, "-x", "80", "-y", "24", "-c", cwd or home)
+        # Without this, the mouse wheel/scrollbar over the pane does nothing --
+        # tmux owns the pane's scrollback itself (it's not exposed through
+        # xterm.js's native viewport), and only enters copy-mode to scroll it
+        # when the client has mouse reporting on. Session-scoped (no -g) so it
+        # doesn't change behavior for unrelated sessions on the shared host.
+        _tmux("set-option", "-t", session_name, "mouse", "on")
         if command in LAUNCHER_COMMANDS:
             # Only on creation -- reattaching to an existing session must
             # never re-type the launcher, or every reconnect would relaunch
@@ -701,3 +1174,498 @@ async def terminal_ws(
             os.close(fd)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Project file browser -- generic read/write file manager over a host path,
+# backing the Project Delivery > Projects detail page's working-directory
+# file tree. Unlike foundation_docs.py (backend container, jailed to one
+# mounted .md-only root), a project's working_directory_path is an arbitrary
+# HOST path the backend container can't see -- so, same reasoning as the
+# terminal/browse-dirs endpoints above, this service does the actual
+# filesystem work. There is deliberately no root jail here, matching
+# browse_dirs' own trust model: the bridge token is the boundary, and
+# forgehub-backend is the one that scopes every path to the calling
+# project's working_directory_path before it ever reaches this service
+# (see api/routes/project.py's _safe_join).
+# ---------------------------------------------------------------------------
+
+_MAX_READABLE_FILE_BYTES = 2 * 1024 * 1024
+
+
+class FsEntry(BaseModel):
+    name: str
+    path: str
+    type: str  # "file" | "dir"
+    size: int | None = None
+
+
+class FsListResponse(BaseModel):
+    path: str
+    parent: str | None
+    entries: list[FsEntry]
+
+
+@app.get("/v1/fs/list", response_model=FsListResponse)
+async def fs_list(path: str = Query(...), x_bridge_token: str | None = Header(default=None)) -> FsListResponse:
+    _check_token(x_bridge_token)
+    target = Path(path)
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail="Not a directory")
+    try:
+        children = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied") from None
+
+    entries = []
+    for entry in children:
+        try:
+            is_dir = entry.is_dir()
+            entries.append(
+                FsEntry(
+                    name=entry.name,
+                    path=str(entry),
+                    type="dir" if is_dir else "file",
+                    size=None if is_dir else entry.stat().st_size,
+                )
+            )
+        except OSError:
+            continue  # broken symlink or similar -- skip rather than 500
+
+    return FsListResponse(
+        path=str(target),
+        parent=str(target.parent) if target.parent != target else None,
+        entries=entries,
+    )
+
+
+class FsContent(BaseModel):
+    path: str
+    content: str
+
+
+def _is_probably_binary(data: bytes) -> bool:
+    return b"\x00" in data
+
+
+@app.get("/v1/fs/read", response_model=FsContent)
+async def fs_read(path: str = Query(...), x_bridge_token: str | None = Header(default=None)) -> FsContent:
+    _check_token(x_bridge_token)
+    target = Path(path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    size = target.stat().st_size
+    if size > _MAX_READABLE_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large to view ({size} bytes)")
+    data = target.read_bytes()
+    if _is_probably_binary(data):
+        raise HTTPException(status_code=415, detail="File appears to be binary")
+    return FsContent(path=str(target), content=data.decode("utf-8", errors="replace"))
+
+
+class FsWriteRequest(BaseModel):
+    path: str
+    content: str
+
+
+@app.put("/v1/fs/write", response_model=FsContent)
+async def fs_write(req: FsWriteRequest, x_bridge_token: str | None = Header(default=None)) -> FsContent:
+    """Writes (creating the file, and any missing parent dirs, if needed) --
+    doubles as the host side of both "save edit" and "create new file"."""
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(req.content, encoding="utf-8")
+    return FsContent(path=str(target), content=req.content)
+
+
+class FsPathRequest(BaseModel):
+    path: str
+
+
+@app.post("/v1/fs/mkdir", response_model=FsEntry)
+async def fs_mkdir(req: FsPathRequest, x_bridge_token: str | None = Header(default=None)) -> FsEntry:
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    if target.exists():
+        raise HTTPException(status_code=409, detail="Already exists")
+    target.mkdir(parents=True)
+    return FsEntry(name=target.name, path=str(target), type="dir")
+
+
+@app.post("/v1/fs/create-file", response_model=FsEntry)
+async def fs_create_file(req: FsPathRequest, x_bridge_token: str | None = Header(default=None)) -> FsEntry:
+    """Distinct from fs_write: errors (409) if the file already exists,
+    since this backs "new file" in the UI, where silently overwriting an
+    existing one would be the wrong behavior."""
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    if target.exists():
+        raise HTTPException(status_code=409, detail="Already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.touch()
+    return FsEntry(name=target.name, path=str(target), type="file", size=0)
+
+
+class FsRenameRequest(BaseModel):
+    path: str
+    new_path: str
+
+
+@app.patch("/v1/fs/rename", response_model=FsEntry)
+async def fs_rename(req: FsRenameRequest, x_bridge_token: str | None = Header(default=None)) -> FsEntry:
+    """Renames or moves -- a plain `Path.rename`, so it also relocates a
+    file/dir to a different parent directory if new_path's parent differs
+    from path's, same as `mv`."""
+    _check_token(x_bridge_token)
+    source = Path(req.path)
+    dest = Path(req.new_path)
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="Source not found")
+    if dest.exists():
+        raise HTTPException(status_code=409, detail="Destination already exists")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(dest)
+    return FsEntry(name=dest.name, path=str(dest), type="dir" if dest.is_dir() else "file")
+
+
+@app.delete("/v1/fs/delete")
+async def fs_delete(
+    path: str = Query(...),
+    recursive: bool = Query(default=False),
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    _check_token(x_bridge_token)
+    target = Path(path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    if target.is_dir():
+        if any(target.iterdir()) and not recursive:
+            raise HTTPException(
+                status_code=400, detail="Directory not empty (pass recursive=true to delete anyway)"
+            )
+        shutil.rmtree(target)
+    else:
+        target.unlink()
+    return {"status": "ok"}
+
+
+class FsChmodRequest(BaseModel):
+    path: str
+    lock: bool  # True = remove write bits (a-w), False = restore owner write (u+w)
+
+
+@app.post("/v1/fs/chmod")
+async def fs_chmod(req: FsChmodRequest, x_bridge_token: str | None = Header(default=None)) -> dict:
+    """Apply or remove write-protection on a path and all its children.
+
+    lock=True  → chmod -R a-w  (read-only for everyone; root can always override)
+    lock=False → chmod -R u+w  (restore write for the owner)
+
+    This is a best-effort operation: missing paths are silently skipped so that
+    a structure node with a non-existent path doesn't block lock/unlock.
+    """
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    if not target.exists():
+        return {"status": "skipped", "reason": "path does not exist"}
+
+    mode_arg = "a-w" if req.lock else "u+w"
+    result = subprocess.run(
+        ["chmod", "-R", mode_arg, str(target)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"chmod failed: {result.stderr.strip()}",
+        )
+    return {"status": "ok", "path": str(target), "lock": req.lock}
+
+
+# ---------------------------------------------------------------------------
+# Filesystem tar/untar  (used by the product backup/restore endpoints)
+# ---------------------------------------------------------------------------
+
+# Directories commonly excluded from project archives to keep sizes small.
+_TAR_EXCLUDES = {
+    ".git", "node_modules", ".venv", "venv", "__pycache__", ".mypy_cache",
+    ".pytest_cache", "dist", "build", ".next", ".nuxt", ".turbo", ".parcel-cache",
+    "coverage", ".coverage", "htmlcov", "target",
+}
+
+
+def _tar_filter(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo | None:
+    """Skip heavy/irrelevant directories during backup."""
+    name = Path(tarinfo.name).name
+    if name in _TAR_EXCLUDES:
+        return None
+    return tarinfo
+
+
+class FsTarRequest(BaseModel):
+    path: str
+
+
+@app.post("/v1/fs/tar")
+async def fs_tar(req: FsTarRequest, x_bridge_token: str | None = Header(default=None)) -> dict:
+    """Create a compressed tar of a path, return base64-encoded bytes.
+
+    Common heavy directories (.git, node_modules, .venv, …) are excluded
+    so that typical code projects remain a manageable download size.
+    """
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {req.path}")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        tar.add(str(target), arcname=target.name, filter=_tar_filter)
+    raw = buf.getvalue()
+    return {
+        "status": "ok",
+        "archive_b64": base64.b64encode(raw).decode(),
+        "size_bytes": len(raw),
+    }
+
+
+class FsUntarRequest(BaseModel):
+    path: str          # target directory where archive will be extracted
+    archive_b64: str   # base64-encoded tar.gz bytes
+
+
+@app.post("/v1/fs/untar")
+async def fs_untar(req: FsUntarRequest, x_bridge_token: str | None = Header(default=None)) -> dict:
+    """Extract a base64-encoded tar.gz into the given directory."""
+    _check_token(x_bridge_token)
+    target = Path(req.path)
+    target.mkdir(parents=True, exist_ok=True)
+    raw = base64.b64decode(req.archive_b64)
+    buf = io.BytesIO(raw)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        tar.extractall(str(target))
+    return {"status": "ok", "path": str(target)}
+
+
+# ---------------------------------------------------------------------------
+# Docker management endpoints
+# ---------------------------------------------------------------------------
+
+_CONTAINER_NAME_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.\-]+$')
+
+
+class DockerRestartRequest(BaseModel):
+    container_name: str
+
+
+class DockerLogsRequest(BaseModel):
+    container_name: str
+    lines: int = 100
+
+
+@app.post("/v1/docker/ps")
+async def docker_ps(x_bridge_token: str | None = Header(default=None)) -> dict:
+    """List all Docker containers (running and stopped)."""
+    _check_token(x_bridge_token)
+    result = subprocess.run(
+        ["docker", "ps", "-a", "--format", "{{json .}}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    containers = []
+    for line in result.stdout.strip().split("\n"):
+        line = line.strip()
+        if line:
+            try:
+                containers.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+    return {"containers": containers}
+
+
+@app.post("/v1/docker/restart")
+async def docker_restart(
+    req: DockerRestartRequest,
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Restart a Docker container by name."""
+    _check_token(x_bridge_token)
+    if not _CONTAINER_NAME_RE.match(req.container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name")
+    result = subprocess.run(
+        ["docker", "restart", req.container_name],
+        capture_output=True, text=True, timeout=60,
+    )
+    return {
+        "success": result.returncode == 0,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }
+
+
+@app.post("/v1/docker/logs")
+async def docker_logs(
+    req: DockerLogsRequest,
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Return the last N lines of a container's logs (stdout + stderr combined)."""
+    _check_token(x_bridge_token)
+    if not _CONTAINER_NAME_RE.match(req.container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name")
+    result = subprocess.run(
+        ["docker", "logs", "--tail", str(min(req.lines, 2000)), req.container_name],
+        capture_output=True, text=True, timeout=30,
+    )
+    return {
+        "logs": result.stdout + result.stderr,
+        "success": result.returncode == 0,
+    }
+
+
+@app.post("/v1/docker/inspect")
+async def docker_inspect(
+    req: DockerRestartRequest,   # reuse: container_name field
+    x_bridge_token: str | None = Header(default=None),
+) -> dict:
+    """Return full docker inspect JSON for a single container."""
+    _check_token(x_bridge_token)
+    if not _CONTAINER_NAME_RE.match(req.container_name):
+        raise HTTPException(status_code=400, detail="Invalid container name")
+    result = subprocess.run(
+        ["docker", "inspect", req.container_name],
+        capture_output=True, text=True, timeout=15,
+    )
+    try:
+        data = json.loads(result.stdout)
+        return {"inspect": data[0] if data else {}}
+    except Exception:
+        return {"inspect": {}}
+
+
+@app.post("/v1/docker/volumes")
+async def docker_volumes(x_bridge_token: str | None = Header(default=None)) -> dict:
+    """List all Docker volumes with inspect details (driver, mountpoint, usage)."""
+    _check_token(x_bridge_token)
+    ls = subprocess.run(
+        ["docker", "volume", "ls", "--format", "{{json .}}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    names = []
+    for line in ls.stdout.strip().split("\n"):
+        line = line.strip()
+        if line:
+            try:
+                names.append(json.loads(line).get("Name", ""))
+            except Exception:
+                pass
+    names = [n for n in names if n]
+
+    volumes = []
+    if names:
+        insp = subprocess.run(
+            ["docker", "volume", "inspect"] + names,
+            capture_output=True, text=True, timeout=30,
+        )
+        try:
+            volumes = json.loads(insp.stdout)
+        except Exception:
+            volumes = []
+
+    # Map which containers use each volume
+    ps = subprocess.run(
+        ["docker", "ps", "-a", "--format", "{{json .}}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    container_names = []
+    for line in ps.stdout.strip().split("\n"):
+        line = line.strip()
+        if line:
+            try:
+                container_names.append(json.loads(line).get("Names", ""))
+            except Exception:
+                pass
+
+    # Build volume → containers map via inspect of all containers
+    vol_containers: dict[str, list[str]] = {}
+    if container_names:
+        ci = subprocess.run(
+            ["docker", "inspect"] + container_names,
+            capture_output=True, text=True, timeout=30,
+        )
+        try:
+            cdata = json.loads(ci.stdout)
+            for c in cdata:
+                cname = c.get("Name", "").lstrip("/")
+                for m in c.get("Mounts", []):
+                    vname = m.get("Name") or m.get("Source", "")
+                    if vname:
+                        vol_containers.setdefault(vname, []).append(cname)
+        except Exception:
+            pass
+
+    result = []
+    for v in volumes:
+        vname = v.get("Name", "")
+        result.append({
+            "name": vname,
+            "driver": v.get("Driver", ""),
+            "mountpoint": v.get("Mountpoint", ""),
+            "scope": v.get("Scope", ""),
+            "labels": v.get("Labels") or {},
+            "containers": vol_containers.get(vname, []),
+        })
+    return {"volumes": result}
+
+
+@app.post("/v1/docker/networks")
+async def docker_networks(x_bridge_token: str | None = Header(default=None)) -> dict:
+    """List all Docker networks with inspect details (driver, subnets, containers)."""
+    _check_token(x_bridge_token)
+    ls = subprocess.run(
+        ["docker", "network", "ls", "--format", "{{json .}}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    names = []
+    for line in ls.stdout.strip().split("\n"):
+        line = line.strip()
+        if line:
+            try:
+                names.append(json.loads(line).get("Name", ""))
+            except Exception:
+                pass
+    names = [n for n in names if n]
+
+    networks = []
+    if names:
+        insp = subprocess.run(
+            ["docker", "network", "inspect"] + names,
+            capture_output=True, text=True, timeout=30,
+        )
+        try:
+            networks = json.loads(insp.stdout)
+        except Exception:
+            networks = []
+
+    result = []
+    for n in networks:
+        ipam = n.get("IPAM", {})
+        subnets = [
+            cfg.get("Subnet", "")
+            for cfg in (ipam.get("Config") or [])
+            if cfg.get("Subnet")
+        ]
+        containers = [
+            {"name": v.get("Name", k), "ipv4": v.get("IPv4Address", "")}
+            for k, v in (n.get("Containers") or {}).items()
+        ]
+        result.append({
+            "id": n.get("Id", "")[:12],
+            "name": n.get("Name", ""),
+            "driver": n.get("Driver", ""),
+            "scope": n.get("Scope", ""),
+            "internal": n.get("Internal", False),
+            "ipv6": n.get("EnableIPv6", False),
+            "subnets": subnets,
+            "containers": containers,
+        })
+    return {"networks": result}

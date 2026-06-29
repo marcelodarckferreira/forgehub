@@ -45,6 +45,23 @@ export function TerminalPane({ sessionId, command, cwd, active }: TerminalPanePr
     fitAddonRef.current = fitAddon;
     termRef.current = term;
 
+    // xterm.js's own keydown handling treats Ctrl+C/Ctrl+V as raw control
+    // bytes (SIGINT / SYN) and calls preventDefault on them, which stops the
+    // browser's native copy/paste from ever firing -- even though xterm
+    // already has "copy"/"paste" DOM listeners wired up to do the right
+    // thing with the selection/clipboard. Stepping out of the way for these
+    // two combos (returning false skips xterm's own handling) lets the
+    // browser's native copy/paste reach those listeners instead. Cmd+C/V on
+    // Mac already bypass xterm's interception on their own, so this is a
+    // no-op there.
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown" || (!event.ctrlKey && !event.metaKey)) return true;
+      const key = event.key.toLowerCase();
+      if (key === "c" && term.hasSelection()) return false;
+      if (key === "v") return false;
+      return true;
+    });
+
     const params = new URLSearchParams();
     params.set("session", sessionId);
     if (command) params.set("command", command);
@@ -83,19 +100,12 @@ export function TerminalPane({ sessionId, command, cwd, active }: TerminalPanePr
     });
 
     // The PTY only carries keystrokes, not the browser's clipboard -- a
-    // pasted image has no representation as terminal input. Instead, upload
-    // it and type its host file path, the same way dragging a file onto a
-    // real terminal does; CLI agents (claude/codex/agy) that support image
-    // input read it by path from there.
-    const handlePaste = (event: ClipboardEvent) => {
-      const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) =>
-        item.type.startsWith("image/")
-      );
-      if (!imageItem) return;
-      event.preventDefault();
-      const file = imageItem.getAsFile();
-      if (!file || ws.readyState !== WebSocket.OPEN) return;
-
+    // pasted or dropped image has no representation as terminal input.
+    // Instead, upload it and type its host file path, the same way dragging
+    // a file onto a real terminal does; CLI agents (claude/codex/agy) that
+    // support image input read it by path from there.
+    const uploadImageFile = (file: File) => {
+      if (ws.readyState !== WebSocket.OPEN) return;
       const formData = new FormData();
       formData.append("file", file, file.name || "pasted-image.png");
       fetch(`${API_BASE}/api/v1/terminal/upload-image`, { method: "POST", body: formData })
@@ -107,9 +117,44 @@ export function TerminalPane({ sessionId, command, cwd, active }: TerminalPanePr
         })
         .catch(() => {});
     };
+
+    const handlePaste = (event: ClipboardEvent) => {
+      const imageItem = Array.from(event.clipboardData?.items ?? []).find((item) =>
+        item.type.startsWith("image/")
+      );
+      if (!imageItem) return;
+      event.preventDefault();
+      const file = imageItem.getAsFile();
+      if (file) uploadImageFile(file);
+    };
     container.addEventListener("paste", handlePaste);
 
+    // xterm renders rows as plain DOM text, so a dragged file landing on it
+    // would otherwise just navigate the browser to the file (the default
+    // "drop" action) instead of reaching the terminal.
+    const handleDragOver = (event: DragEvent) => {
+      event.preventDefault();
+    };
+    const handleDrop = (event: DragEvent) => {
+      const file = Array.from(event.dataTransfer?.files ?? []).find((f) =>
+        f.type.startsWith("image/")
+      );
+      if (!file) return;
+      event.preventDefault();
+      uploadImageFile(file);
+    };
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
+
     const resizeObserver = new ResizeObserver(() => {
+      // While the tab is inactive its container is display:none, which
+      // collapses offsetWidth/offsetHeight to 0 -- FitAddon then proposes
+      // its hard-coded floor of {cols:2, rows:1} and that bogus size gets
+      // pushed straight to the real PTY (host-bridge's TIOCSWINSZ), visibly
+      // corrupting whatever was rendering in the background tmux session.
+      // Skip fitting while hidden; the `active` effect below re-fits with
+      // the real size once the tab is shown again.
+      if (container.offsetWidth === 0 || container.offsetHeight === 0) return;
       fitAddon.fit();
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
@@ -120,6 +165,8 @@ export function TerminalPane({ sessionId, command, cwd, active }: TerminalPanePr
     return () => {
       inputDisposable.dispose();
       container.removeEventListener("paste", handlePaste);
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("drop", handleDrop);
       resizeObserver.disconnect();
       ws.close();
       term.dispose();

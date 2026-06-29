@@ -17,6 +17,8 @@ import {
   usePipelines,
   type PipelineCreateInput,
 } from "@/hooks/usePipeline";
+import { useProjects } from "@/hooks/useProject";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PipelineForm } from "./PipelineForm";
 
 const STATUS_VARIANT: Record<
@@ -32,9 +34,14 @@ const STATUS_VARIANT: Record<
 
 export default function PipelinePage() {
   const { data: pipelines, isLoading, isError, error } = usePipelines();
+  const { data: projects } = useProjects();
   const createPipeline = useCreatePipeline();
   const deletePipeline = useDeletePipeline();
   const [showForm, setShowForm] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  const projectName = (id: string): string =>
+    projects?.find((p) => p.id === id)?.name ?? id.slice(0, 8) + "…";
 
   function handleCreate(values: PipelineCreateInput) {
     createPipeline.mutate(
@@ -142,7 +149,7 @@ export default function PipelinePage() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex-1 text-sm text-muted-foreground">
-                  <p>Project: {pipeline.project_id}</p>
+                  <p>Project: {projectName(pipeline.project_id)}</p>
                   <p className="mt-1">
                     {stageCount > 0
                       ? `${completedCount}/${stageCount} stages completed`
@@ -159,7 +166,7 @@ export default function PipelinePage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => deletePipeline.mutate(pipeline.id)}
+                    onClick={() => setPendingDeleteId(pipeline.id)}
                     disabled={deletePipeline.isPending}
                     aria-label={`Delete ${pipeline.name}`}
                   >
@@ -171,6 +178,17 @@ export default function PipelinePage() {
           })}
         </div>
       )}
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="Delete pipeline?"
+        description="This will permanently delete the pipeline and all its stages. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (pendingDeleteId) deletePipeline.mutate(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 }

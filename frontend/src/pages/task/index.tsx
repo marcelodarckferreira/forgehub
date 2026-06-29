@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
-import { AlertCircle, ClipboardList, Loader2, Plus, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { AlertCircle, ClipboardList, Filter, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -24,6 +24,8 @@ import {
   useTasks,
   type TaskCreateInput,
 } from "@/hooks/useTask";
+import { useProjects } from "@/hooks/useProject";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TaskForm } from "./TaskForm";
 
 const STATUS_VARIANT: Record<
@@ -34,7 +36,8 @@ const STATUS_VARIANT: Record<
   assigned: "secondary",
   in_progress: "default",
   blocked: "destructive",
-  completed: "success",
+  done: "success",
+  deployed: "success",
   cancelled: "destructive",
 };
 
@@ -49,10 +52,27 @@ const PRIORITY_VARIANT: Record<
 };
 
 export default function TaskPage() {
+  const [searchParams] = useSearchParams();
+  const prefilledCrId = searchParams.get("change_request_id") ?? undefined;
+  const prefilledPlanningItemId = searchParams.get("planning_item_id") ?? undefined;
+  const prefilledProjectId = searchParams.get("project_id") ?? undefined;
+
   const { data: tasks, isLoading, isError, error } = useTasks();
+  const { data: projects } = useProjects();
   const createTask = useCreateTask();
   const deleteTask = useDeleteTask();
   const [showForm, setShowForm] = useState(false);
+  const [filterProjectId, setFilterProjectId] = useState("");
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+
+  const visibleTasks = filterProjectId
+    ? (tasks ?? []).filter((t) => t.project_id === filterProjectId)
+    : (tasks ?? []);
+
+  // Auto-open form when arriving with pre-filled params from a planning item or CR button.
+  useEffect(() => {
+    if (prefilledCrId || prefilledPlanningItemId) setShowForm(true);
+  }, [prefilledCrId, prefilledPlanningItemId]);
 
   function handleCreate(values: TaskCreateInput) {
     createTask.mutate(
@@ -61,6 +81,7 @@ export default function TaskPage() {
         description: values.description || undefined,
         project_id: values.project_id || undefined,
         planning_item_id: values.planning_item_id || undefined,
+        change_request_id: values.change_request_id || undefined,
         parent_task_id: values.parent_task_id || undefined,
         due_date: values.due_date || undefined,
       },
@@ -74,16 +95,31 @@ export default function TaskPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Tasks</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Execution</h1>
           <p className="text-muted-foreground">
             Planned tasks and subtasks split out from planning items, assigned to agents and tracked
             through execution.
           </p>
         </div>
-        <Button onClick={() => setShowForm((v) => !v)}>
-          <Plus className="mr-2 h-4 w-4" />
-          New task
-        </Button>
+        <div className="flex items-center gap-2">
+          <Filter className="h-4 w-4 text-muted-foreground" />
+          <select
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            value={filterProjectId}
+            onChange={(e) => setFilterProjectId(e.target.value)}
+          >
+            <option value="">All projects</option>
+            {projects?.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <Button onClick={() => setShowForm((v) => !v)}>
+            <Plus className="mr-2 h-4 w-4" />
+            New task
+          </Button>
+        </div>
       </div>
 
       {showForm && (
@@ -99,6 +135,12 @@ export default function TaskPage() {
               onSubmit={handleCreate}
               onCancel={() => setShowForm(false)}
               isSubmitting={createTask.isPending}
+              projectId={prefilledProjectId}
+              defaultValues={{
+                change_request_id: prefilledCrId ?? "",
+                planning_item_id: prefilledPlanningItemId ?? "",
+                project_id: prefilledProjectId ?? "",
+              }}
             />
             {createTask.isError && (
               <p className="mt-3 text-sm text-destructive">
@@ -125,7 +167,7 @@ export default function TaskPage() {
         </Card>
       )}
 
-      {!isLoading && !isError && tasks && tasks.length === 0 && (
+      {!isLoading && !isError && visibleTasks.length === 0 && (
         <Card>
           <CardContent className="flex flex-col items-center gap-3 py-16 text-center">
             <ClipboardList className="h-10 w-10 text-muted-foreground" />
@@ -143,7 +185,7 @@ export default function TaskPage() {
         </Card>
       )}
 
-      {!isLoading && !isError && tasks && tasks.length > 0 && (
+      {!isLoading && !isError && visibleTasks.length > 0 && (
         <Card>
           <CardContent className="p-0">
             <Table>
@@ -158,7 +200,7 @@ export default function TaskPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {tasks.map((task) => (
+                {visibleTasks.map((task) => (
                   <TableRow key={task.id}>
                     <TableCell>
                       <Link to={`/tasks/${task.id}`} className="font-medium hover:underline">
@@ -195,7 +237,7 @@ export default function TaskPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => deleteTask.mutate(task.id)}
+                          onClick={() => setPendingDeleteId(task.id)}
                           disabled={deleteTask.isPending}
                           aria-label={`Delete ${task.title}`}
                         >
@@ -210,6 +252,18 @@ export default function TaskPage() {
           </CardContent>
         </Card>
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="Delete task?"
+        description="This will permanently delete the task and all its executions. This cannot be undone."
+        confirmLabel="Delete"
+        onConfirm={() => {
+          if (pendingDeleteId) deleteTask.mutate(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   );
 }

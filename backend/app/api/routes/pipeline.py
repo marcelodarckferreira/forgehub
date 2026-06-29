@@ -62,6 +62,7 @@ from app.api.schemas.pipeline import (
     ProjectPipelineUpdate,
 )
 from app.db.base import get_db
+from app.db.models.governance import AuditEvent
 from app.db.models.pipeline import (
     PipelineStage,
     PipelineStageDependency,
@@ -438,6 +439,18 @@ async def update_stage(
 
     for field, value in updates.items():
         setattr(stage, field, value)
+
+    if new_status == "completed":
+        db.add(
+            AuditEvent(
+                entity_type="pipeline_stage",
+                entity_id=stage.id,
+                event_type="stage_completed",
+                actor="system",
+                payload={"pipeline_id": str(stage.pipeline_id), "name": stage.name},
+            )
+        )
+
     await db.commit()
     return await _get_stage_or_404(db, stage_id)
 

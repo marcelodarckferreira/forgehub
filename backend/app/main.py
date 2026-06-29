@@ -19,6 +19,9 @@ from app.api.routes import (
     auth,
     backlog,
     chat,
+    cron_scripts,
+    database,
+    deploy,
     foundation,
     foundation_docs,
     governance,
@@ -70,6 +73,9 @@ app.include_router(terminal.router)
 app.include_router(toolversions.router)
 app.include_router(systemstats.router)
 app.include_router(vault.router)
+app.include_router(cron_scripts.router)
+app.include_router(deploy.router)
+app.include_router(database.router)
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)

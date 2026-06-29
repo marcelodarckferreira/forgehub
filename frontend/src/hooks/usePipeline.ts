@@ -115,6 +115,16 @@ export type PipelineCreateInput = z.infer<typeof pipelineCreateSchema>;
 export const pipelineUpdateSchema = pipelineCreateSchema.partial();
 export type PipelineUpdateInput = z.infer<typeof pipelineUpdateSchema>;
 
+export const pipelineTemplateSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+});
+
+export type PipelineTemplate = z.infer<typeof pipelineTemplateSchema>;
+
 // ---------------------------------------------------------------------------
 // Query keys
 // ---------------------------------------------------------------------------
@@ -122,6 +132,7 @@ export type PipelineUpdateInput = z.infer<typeof pipelineUpdateSchema>;
 export const pipelineKeys = {
   all: ["pipelines"] as const,
   detail: (id: string) => ["pipelines", id] as const,
+  templates: ["pipeline-templates"] as const,
 };
 
 const RESOURCE = "/api/v1/pipelines";
@@ -173,6 +184,61 @@ export function useDeletePipeline() {
     mutationFn: (id: string) => apiClient.delete<void>(`${RESOURCE}/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: pipelineKeys.all });
+    },
+  });
+}
+
+export function usePipelineTemplates() {
+  return useQuery({
+    queryKey: pipelineKeys.templates,
+    queryFn: () => apiClient.get<PipelineTemplate[]>(`${RESOURCE}/templates`),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Stage CRUD
+// ---------------------------------------------------------------------------
+
+export const stageCreateSchema = z.object({
+  name: z.string().min(1, "Name is required").max(255),
+  stage_type: z.enum(STAGE_TYPES),
+  order_index: z.coerce.number().int().min(0),
+  status: z.enum(STAGE_STATUSES).default("pending"),
+  requires_approval: z.boolean().default(false),
+  requires_verification: z.boolean().default(false),
+});
+
+export type StageCreateInput = z.infer<typeof stageCreateSchema>;
+
+export function useCreateStage(pipelineId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: StageCreateInput) =>
+      apiClient.post<PipelineStage>(`${RESOURCE}/${pipelineId}/stages`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.detail(pipelineId) });
+    },
+  });
+}
+
+export function useUpdateStage(pipelineId: string, stageId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Partial<StageCreateInput>) =>
+      apiClient.patch<PipelineStage>(`${RESOURCE}/stages/${stageId}`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.detail(pipelineId) });
+    },
+  });
+}
+
+export function useDeleteStage(pipelineId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (stageId: string) =>
+      apiClient.delete<void>(`${RESOURCE}/stages/${stageId}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: pipelineKeys.detail(pipelineId) });
     },
   });
 }

@@ -6,7 +6,7 @@ populate the Agent domain from the Hermes ecosystem's canonical docs.
 
 Canonical source (confirmed by /root/.hermes/foundation/agents/README.md
 and the `hermes-foundation-agent-registry` skill -- NOT
-/root/.hermes/foundation/vault/Agents/, which is a derived mirror of only
+/root/.hermes/knowledge_base/vault/Agents/, which is a derived mirror of only
 the 8 baseline profiles and explicitly points back here):
   - ECOSYSTEM_AGENTS.md   -- registry: profile/name/layer/role/telegram
   - AGENT_RUNTIME_MATRIX.md -- runtime tier (A/B/C) per profile

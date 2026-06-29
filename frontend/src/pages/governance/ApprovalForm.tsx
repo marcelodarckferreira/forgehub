@@ -7,8 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select } from "@/components/ui/select";
 import {
-  APPROVAL_STATUSES,
-  APPROVAL_SUBJECT_TYPES,
+  APPROVAL_ENTITY_TYPES,
   approvalCreateSchema,
   type ApprovalCreateInput,
 } from "@/hooks/useGovernance";
@@ -35,12 +34,11 @@ export function ApprovalForm({
   } = useForm<ApprovalCreateInput>({
     resolver: zodResolver(approvalCreateSchema),
     defaultValues: {
-      subject_type: "pipeline_stage_gate",
-      subject_id: "",
-      status: "pending",
+      entity_type: "pipeline_stage_gate",
+      entity_id: "",
+      approval_type: "",
       requested_by: "",
-      approved_by: "",
-      decision_notes: "",
+      comments: "",
       policy_id: "",
       ...defaultValues,
     },
@@ -50,43 +48,43 @@ export function ApprovalForm({
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="subject_type">Subject type</Label>
-          <Select id="subject_type" {...register("subject_type")}>
-            {APPROVAL_SUBJECT_TYPES.map((type) => (
+          <Label htmlFor="entity_type">Entity type</Label>
+          <Select id="entity_type" {...register("entity_type")}>
+            {APPROVAL_ENTITY_TYPES.map((type) => (
               <option key={type} value={type}>
                 {type.replace(/_/g, " ")}
               </option>
             ))}
           </Select>
-          {errors.subject_type && (
-            <p className="text-sm text-destructive">{errors.subject_type.message}</p>
+          {errors.entity_type && (
+            <p className="text-sm text-destructive">{errors.entity_type.message}</p>
           )}
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="subject_id">Subject ID</Label>
+          <Label htmlFor="entity_id">Entity ID</Label>
           <Input
-            id="subject_id"
+            id="entity_id"
             placeholder="uuid of the gate, release, skill, etc."
-            {...register("subject_id")}
+            {...register("entity_id")}
           />
-          {errors.subject_id && (
-            <p className="text-sm text-destructive">{errors.subject_id.message}</p>
+          {errors.entity_id && (
+            <p className="text-sm text-destructive">{errors.entity_id.message}</p>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="status">Status</Label>
-          <Select id="status" {...register("status")}>
-            {APPROVAL_STATUSES.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </Select>
-          {errors.status && <p className="text-sm text-destructive">{errors.status.message}</p>}
+          <Label htmlFor="approval_type">Approval type</Label>
+          <Input
+            id="approval_type"
+            placeholder="e.g. gate_approval, release_approval, security_review"
+            {...register("approval_type")}
+          />
+          {errors.approval_type && (
+            <p className="text-sm text-destructive">{errors.approval_type.message}</p>
+          )}
         </div>
 
         <div className="space-y-2">
@@ -94,14 +92,6 @@ export function ApprovalForm({
           <Input id="requested_by" placeholder="agent or user id" {...register("requested_by")} />
           {errors.requested_by && (
             <p className="text-sm text-destructive">{errors.requested_by.message}</p>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="approved_by">Approved by</Label>
-          <Input id="approved_by" placeholder="agent or user id" {...register("approved_by")} />
-          {errors.approved_by && (
-            <p className="text-sm text-destructive">{errors.approved_by.message}</p>
           )}
         </div>
       </div>
@@ -119,14 +109,14 @@ export function ApprovalForm({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="decision_notes">Decision notes</Label>
+        <Label htmlFor="comments">Comments</Label>
         <Textarea
-          id="decision_notes"
-          placeholder="Rationale for the decision, conditions, or context"
-          {...register("decision_notes")}
+          id="comments"
+          placeholder="Rationale for the request, conditions, or context"
+          {...register("comments")}
         />
-        {errors.decision_notes && (
-          <p className="text-sm text-destructive">{errors.decision_notes.message}</p>
+        {errors.comments && (
+          <p className="text-sm text-destructive">{errors.comments.message}</p>
         )}
       </div>
 

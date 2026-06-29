@@ -7,58 +7,49 @@ import { apiClient } from "@/lib/api";
  *   approvals, audit_events, policies
  *
  * Approval is the primary entity -- it records the outcome of a gated
- * transition (pipeline stage gate, release approval, critical skill
- * approval, etc.). AuditEvent is read-mostly: every major entity
- * transition produces one, and the UI only ever lists/reads them. Policy
- * is a governed rule (e.g. "critical skills require approval") that
- * approvals and gates are evaluated against.
+ * transition, targeted polymorphically via (entity_type, entity_id).
+ * AuditEvent is read-mostly: every major entity transition produces one
+ * (create + list/get only, no update/delete, by design -- audit
+ * integrity). Policy is a governed rule that approvals are evaluated
+ * against.
  *
- * Backend contract: /api/v1/governance (list/create/get/update/delete on
- * Approval). Audit events and policies are sub-resources reachable under
- * the same governance namespace.
+ * Backend contract (backend/app/api/routes/governance.py), all under the
+ * /api/v1/governance prefix:
+ *   Approval:   POST/GET /approvals, GET /approvals/{id},
+ *               POST /approvals/{id}/approve, POST /approvals/{id}/reject
+ *               (no update/delete -- a decided approval is final)
+ *   AuditEvent: POST/GET /audit-events, GET /audit-events/{id}
+ *   Policy:     POST/GET /policies, GET/PUT/DELETE /policies/{id}
  */
 
-export const APPROVAL_STATUSES = ["pending", "approved", "rejected", "withdrawn"] as const;
+export const APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 
-export const APPROVAL_SUBJECT_TYPES = [
+// Free-text discriminator on the backend (Approval.entity_type) -- these
+// are the values used elsewhere in this codebase, not an enforced enum.
+export const APPROVAL_ENTITY_TYPES = [
   "pipeline_stage_gate",
   "release",
   "skill",
   "change_request",
   "artifact",
 ] as const;
-export type ApprovalSubjectType = (typeof APPROVAL_SUBJECT_TYPES)[number];
-
-export const AUDIT_EVENT_ACTIONS = [
-  "created",
-  "updated",
-  "deleted",
-  "approved",
-  "rejected",
-  "status_changed",
-  "executed",
-] as const;
-export type AuditEventAction = (typeof AUDIT_EVENT_ACTIONS)[number];
-
-export const POLICY_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
-export type PolicyRiskLevel = (typeof POLICY_RISK_LEVELS)[number];
+export type ApprovalEntityType = (typeof APPROVAL_ENTITY_TYPES)[number];
 
 // ---------------------------------------------------------------------------
-// Schemas
+// Schemas (field names match backend/app/api/schemas/governance.py exactly)
 // ---------------------------------------------------------------------------
 
 export const approvalSchema = z.object({
   id: z.string(),
-  subject_type: z.enum(APPROVAL_SUBJECT_TYPES),
-  subject_id: z.string(),
+  entity_type: z.string(),
+  entity_id: z.string(),
+  approval_type: z.string(),
   status: z.enum(APPROVAL_STATUSES).default("pending"),
-  requested_by: z.string().nullable().optional(),
-  approved_by: z.string().nullable().optional(),
-  decision_notes: z.string().nullable().optional(),
   policy_id: z.string().nullable().optional(),
-  requested_at: z.string().optional(),
-  decided_at: z.string().nullable().optional(),
+  requested_by: z.string(),
+  decided_by: z.string().nullable().optional(),
+  comments: z.string().nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
 });
@@ -69,11 +60,11 @@ export const auditEventSchema = z.object({
   id: z.string(),
   entity_type: z.string(),
   entity_id: z.string(),
-  action: z.enum(AUDIT_EVENT_ACTIONS),
-  actor: z.string().nullable().optional(),
-  summary: z.string().nullable().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
-  occurred_at: z.string().optional(),
+  event_type: z.string(),
+  actor: z.string(),
+  payload: z.record(z.unknown()).nullable().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
 });
 
 export type AuditEvent = z.infer<typeof auditEventSchema>;
@@ -82,8 +73,8 @@ export const policySchema = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().nullable().optional(),
-  risk_level: z.enum(POLICY_RISK_LEVELS).default("medium"),
-  requires_approval: z.boolean().default(true),
+  policy_type: z.string(),
+  rules: z.record(z.unknown()).nullable().optional(),
   is_active: z.boolean().default(true),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
@@ -91,21 +82,26 @@ export const policySchema = z.object({
 
 export type Policy = z.infer<typeof policySchema>;
 
-// Payload schema (what the create/edit form submits) for the primary entity.
+// Payload schema (what the create form submits) for the primary entity --
+// matches ApprovalCreate (backend/app/api/schemas/governance.py:49-59).
 export const approvalCreateSchema = z.object({
-  subject_type: z.enum(APPROVAL_SUBJECT_TYPES).default("pipeline_stage_gate"),
-  subject_id: z.string().min(1, "Subject ID is required").max(200, "Subject ID is too long"),
-  status: z.enum(APPROVAL_STATUSES).default("pending"),
-  requested_by: z.string().max(200, "Too long").optional().or(z.literal("")),
-  approved_by: z.string().max(200, "Too long").optional().or(z.literal("")),
-  decision_notes: z.string().max(4000, "Notes are too long").optional().or(z.literal("")),
+  entity_type: z.string().min(1, "Entity type is required").max(100, "Too long"),
+  entity_id: z.string().min(1, "Entity ID is required").max(200, "Entity ID is too long"),
+  approval_type: z.string().min(1, "Approval type is required").max(100, "Too long"),
+  requested_by: z.string().min(1, "Requested by is required").max(150, "Too long"),
+  comments: z.string().max(4000, "Too long").optional().or(z.literal("")),
   policy_id: z.string().optional().or(z.literal("")),
 });
 
 export type ApprovalCreateInput = z.infer<typeof approvalCreateSchema>;
 
-export const approvalUpdateSchema = approvalCreateSchema.partial();
-export type ApprovalUpdateInput = z.infer<typeof approvalUpdateSchema>;
+// Payload for POST /approvals/{id}/approve|reject (ApprovalDecision).
+export const approvalDecisionSchema = z.object({
+  decided_by: z.string().min(1, "Decided by is required").max(150, "Too long"),
+  comments: z.string().max(4000, "Too long").optional().or(z.literal("")),
+});
+
+export type ApprovalDecisionInput = z.infer<typeof approvalDecisionSchema>;
 
 // ---------------------------------------------------------------------------
 // Query keys
@@ -127,14 +123,14 @@ const RESOURCE = "/api/v1/governance";
 export function useApprovals() {
   return useQuery({
     queryKey: governanceKeys.all,
-    queryFn: () => apiClient.get<Approval[]>(RESOURCE),
+    queryFn: () => apiClient.get<Approval[]>(`${RESOURCE}/approvals`),
   });
 }
 
 export function useApproval(id: string | undefined) {
   return useQuery({
     queryKey: governanceKeys.detail(id ?? ""),
-    queryFn: () => apiClient.get<Approval>(`${RESOURCE}/${id}`),
+    queryFn: () => apiClient.get<Approval>(`${RESOURCE}/approvals/${id}`),
     enabled: Boolean(id),
   });
 }
@@ -142,37 +138,31 @@ export function useApproval(id: string | undefined) {
 export function useCreateApproval() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ApprovalCreateInput) => apiClient.post<Approval>(RESOURCE, payload),
+    mutationFn: (payload: ApprovalCreateInput) =>
+      apiClient.post<Approval>(`${RESOURCE}/approvals`, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: governanceKeys.all });
     },
   });
 }
 
-export function useUpdateApproval(id: string) {
+// Deciding an approval is final (no further update) -- the backend
+// rejects deciding an already-decided approval with 409.
+export function useDecideApproval(id: string, decision: "approve" | "reject") {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: ApprovalUpdateInput) =>
-      apiClient.put<Approval>(`${RESOURCE}/${id}`, payload),
+    mutationFn: (payload: ApprovalDecisionInput) =>
+      apiClient.post<Approval>(`${RESOURCE}/approvals/${id}/${decision}`, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: governanceKeys.all });
       queryClient.invalidateQueries({ queryKey: governanceKeys.detail(id) });
-    },
-  });
-}
-
-export function useDeleteApproval() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => apiClient.delete<void>(`${RESOURCE}/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: governanceKeys.all });
+      queryClient.invalidateQueries({ queryKey: governanceKeys.auditEvents });
     },
   });
 }
 
 // ---------------------------------------------------------------------------
-// Audit event hooks (read-mostly)
+// Audit event hooks (read-mostly -- no update/delete by design)
 // ---------------------------------------------------------------------------
 
 export function useAuditEvents() {

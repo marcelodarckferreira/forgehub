@@ -1,0 +1,185 @@
+import { useRef, useState } from "react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ClipboardCopy,
+  Loader2,
+  Play,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { useExecuteQuery } from "@/hooks/useDatabase";
+import type { QueryResult } from "@/hooks/useDatabase";
+import { useSchema } from "./SchemaContext";
+
+const EXAMPLES = [
+  { label: "Tabelas", sql: "SELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = 'company'\nORDER BY table_name" },
+  { label: "Produtos", sql: "SELECT id, name, created_at\nFROM company.products\nORDER BY created_at DESC" },
+  { label: "Projetos", sql: "SELECT p.name, p.status, v.name as version\nFROM company.projects p\nJOIN company.product_versions v ON v.id = p.product_version_id\nORDER BY p.created_at DESC" },
+  { label: "Tasks recentes", sql: "SELECT title, status, created_at\nFROM company.tasks\nORDER BY created_at DESC\nLIMIT 20" },
+];
+
+function ResultsTable({ result }: { result: QueryResult }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyCSV = () => {
+    const header = result.columns.join(",");
+    const body = result.rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    navigator.clipboard.writeText(`${header}\n${body}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <>
+      {/* Sticky header bar */}
+      <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border bg-muted/20 sticky top-0 z-10">
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+        <span className="text-xs text-muted-foreground flex-1">
+          {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
+          {result.truncated && <span className="ml-2 text-amber-600 font-medium">(truncado em 500 linhas)</span>}
+        </span>
+        <Button size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs" onClick={copyCSV}>
+          <ClipboardCopy className="h-3 w-3" /> {copied ? "Copiado!" : "CSV"}
+        </Button>
+      </div>
+      {/* Table — outer div handles scroll */}
+      <table className="w-full text-xs border-collapse">
+        <thead className="sticky top-[33px] z-10">
+          <tr className="bg-muted/80">
+            <th className="px-3 py-2 text-left font-medium text-muted-foreground border-b border-border w-10 text-right">#</th>
+            {result.columns.map((col) => (
+              <th key={col} className="px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono whitespace-nowrap">
+                {col}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/50">
+          {result.rows.map((row, i) => (
+            <tr key={i} className="hover:bg-muted/30 transition-colors">
+              <td className="px-3 py-1.5 text-muted-foreground/50 text-right font-mono">{i + 1}</td>
+              {row.map((cell, j) => (
+                <td key={j} className="px-3 py-1.5 font-mono max-w-[280px]">
+                  {cell === null ? (
+                    <span className="italic text-muted-foreground/50">null</span>
+                  ) : (
+                    <span className="truncate block" title={String(cell)}>{String(cell)}</span>
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {result.rows.length === 0 && (
+        <div className="py-12 text-center text-xs text-muted-foreground">Nenhum resultado retornado.</div>
+      )}
+    </>
+  );
+}
+
+export default function QueryPage() {
+  const { instance, db, schema } = useSchema();
+  const [sql, setSql] = useState(EXAMPLES[0].sql);
+  const [result, setResult] = useState<QueryResult | null>(null);
+  const [queryError, setQueryError] = useState<string | null>(null);
+  const executeMut = useExecuteQuery();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const run = async () => {
+    if (!sql.trim()) return;
+    setQueryError(null);
+    setResult(null);
+    try {
+      const r = await executeMut.mutateAsync({ sql, instance, db, schema });
+      setResult(r);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setQueryError(msg);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      run();
+    }
+  };
+
+  return (
+    <div className="flex flex-col p-4 gap-3">
+      {/* Editor */}
+      <div className="flex flex-col gap-2 shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex-1">SQL Editor</span>
+          <span className="text-[10px] text-muted-foreground">Ctrl+Enter para executar · somente SELECT/WITH/EXPLAIN</span>
+          <div className="flex gap-1">
+            {EXAMPLES.map((ex) => (
+              <Button key={ex.label} size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setSql(ex.sql)}>
+                {ex.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className="relative">
+          <Textarea
+            ref={textareaRef}
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={7}
+            placeholder="SELECT * FROM company.products LIMIT 10"
+            className="font-mono text-xs resize-none bg-muted/30 border-border focus:ring-1 focus:ring-ring"
+            spellCheck={false}
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={run}
+            disabled={executeMut.isPending || !sql.trim()}
+            className="gap-1.5"
+          >
+            {executeMut.isPending
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <Play className="h-3.5 w-3.5" />}
+            Executar
+          </Button>
+          {result && (
+            <Badge variant="outline" className="text-emerald-600 border-emerald-500/30 gap-1">
+              <CheckCircle2 className="h-3 w-3" /> {result.row_count} linha(s) · {result.elapsed_ms}ms
+            </Badge>
+          )}
+          {queryError && (
+            <div className="flex items-center gap-1.5 text-xs text-destructive">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate max-w-lg">{queryError}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Results */}
+      {!result && !queryError && (
+        <div className="flex items-center justify-center rounded-lg border border-border bg-muted/10 py-12">
+          <p className="text-xs text-muted-foreground">Execute uma query para ver os resultados</p>
+        </div>
+      )}
+      {queryError && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+          <p className="text-xs font-semibold text-destructive mb-1 flex items-center gap-1.5">
+            <AlertCircle className="h-3.5 w-3.5" /> Erro na query
+          </p>
+          <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-mono">{queryError}</pre>
+        </div>
+      )}
+      {result && (
+        <div className="rounded-lg border border-border overflow-hidden" style={{ maxHeight: "calc(100vh - 340px)", overflowY: "auto" }}>
+          <ResultsTable result={result} />
+        </div>
+      )}
+    </div>
+  );
+}

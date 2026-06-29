@@ -22,7 +22,7 @@ from app.db.base import Base, TimestampMixin
 
 # Fixed set of CLIs this card monitors -- not user-configurable, so a plain
 # CheckConstraint (not a separate lookup table) is enough.
-MONITORED_TOOLS = ("hermes", "claude", "codex", "antigravity")
+MONITORED_TOOLS = ("hermes", "claude", "codex", "antigravity", "pi", "opencode")
 
 
 class ToolVersionStatus(Base, TimestampMixin):
@@ -33,7 +33,10 @@ class ToolVersionStatus(Base, TimestampMixin):
         # Written as a literal SQL string, not derived from MONITORED_TOOLS
         # via f-string/repr, per every other domain model's CheckConstraint
         # convention (see db/models/product.py).
-        CheckConstraint("tool IN ('hermes', 'claude', 'codex', 'antigravity')", name="ck_tool_version_status_tool"),
+        CheckConstraint(
+            "tool IN ('hermes', 'claude', 'codex', 'antigravity', 'pi', 'opencode')",
+            name="ck_tool_version_status_tool",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

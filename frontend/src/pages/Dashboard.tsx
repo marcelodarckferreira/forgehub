@@ -1,5 +1,6 @@
 import { ToolVersionsCard } from "@/components/ToolVersionsCard";
 import { SystemStatsCard } from "@/components/SystemStatsCard";
+import { ProjectsForgeRouterCard } from "@/components/ProjectsForgeRouterCard";
 
 export default function Dashboard() {
   return (
@@ -12,6 +13,7 @@ export default function Dashboard() {
         <ToolVersionsCard />
         <SystemStatsCard />
       </div>
+      <ProjectsForgeRouterCard />
     </div>
   );
 }
