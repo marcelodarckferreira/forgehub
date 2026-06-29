@@ -104,7 +104,7 @@ function ResultsTable({ result }: { result: QueryResult }) {
 
 export default function QueryPage() {
   const { instance, db, schema } = useSchema();
-  const [sql, setSql] = useState(EXAMPLES[0].sql);
+  const [sql, setSql] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
   const [validationState, setValidationState] = useState<ValidationState>("idle");
