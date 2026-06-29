@@ -113,7 +113,7 @@ export function ResultsTable({ result }: { result: QueryResult }) {
         <span className="text-xs text-muted-foreground flex-1">
           {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
           {result.truncated && (
-            <span className="ml-2 text-amber-600 font-medium">(truncado em 500 linhas)</span>
+            <span className="ml-2 text-amber-600 font-medium">(truncado em 1000 linhas)</span>
           )}
         </span>
         <Button size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs" onClick={copyCSV}>

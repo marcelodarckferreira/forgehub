@@ -76,7 +76,7 @@ SCHEMA = settings.POSTGRES_SCHEMA  # "company"
 
 # Only allow read statements to prevent accidental mutations
 _ALLOWED_STARTS = re.compile(r"^\s*(select|with|explain)\b", re.IGNORECASE)
-_MAX_ROWS = 500
+_MAX_ROWS = 1000
 
 # ---------------------------------------------------------------------------
 # Instances
@@ -162,7 +162,7 @@ class SchemaOut(BaseModel):
 
 class QueryRequest(BaseModel):
     sql: str
-    limit: int = 500
+    limit: int = 1000
     offset: int = 0
     instance: str = "company_postgres"
     db: str = "forgehub"

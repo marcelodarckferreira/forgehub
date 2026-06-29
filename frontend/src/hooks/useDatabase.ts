@@ -125,7 +125,7 @@ export function useExecuteQuery() {
   return useMutation<QueryResult, Error, { sql: string; limit?: number; offset?: number; instance?: string; db?: string; schema?: string }>({
     mutationFn: (payload) => apiClient.post("/api/v1/database/query", {
       sql: payload.sql,
-      limit: payload.limit ?? 500,
+      limit: payload.limit ?? 1000,
       offset: payload.offset ?? 0,
       instance: payload.instance ?? DEFAULT_INSTANCE,
       db: payload.db ?? DEFAULT_DB,
