@@ -123,15 +123,15 @@ function ResultsTable({ result }: { result: QueryResult }) {
       {/* Data table */}
       <table className="text-xs border-collapse" style={{ minWidth: "100%", width: "max-content" }}>
         <thead className="sticky top-[33px] z-10">
-          <tr className="bg-muted">
+          <tr>
             {/* Row number column — not sortable/resizable */}
-            <th className="px-3 py-2 font-medium text-muted-foreground border-b border-border text-right select-none w-10">
+            <th className="px-3 py-2 font-medium text-muted-foreground border-b border-border text-right select-none w-10 bg-muted">
               #
             </th>
             {result.columns.map((col) => (
               <th
                 key={col}
-                className="relative px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono cursor-pointer select-none group"
+                className="relative px-3 py-2 text-left font-medium text-foreground border-b border-border font-mono cursor-pointer select-none group bg-muted"
                 style={colWidths[col] ? { width: colWidths[col], minWidth: colWidths[col] } : undefined}
                 onClick={() => handleSort(col)}
               >
