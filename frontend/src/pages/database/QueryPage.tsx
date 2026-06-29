@@ -98,7 +98,7 @@ export function ResultsTable({ result }: { result: QueryResult }) {
     <>
       {/* Data table */}
       <table className="text-xs border-collapse" style={{ minWidth: "100%", width: "max-content" }}>
-        <thead className="sticky top-[33px] z-10">
+        <thead className="sticky top-0 z-10">
           <tr>
             {/* Row number column — not sortable/resizable */}
             <th className="px-3 py-2 font-medium text-muted-foreground border-b border-border text-right select-none w-10"
