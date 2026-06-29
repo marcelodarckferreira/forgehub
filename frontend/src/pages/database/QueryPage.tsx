@@ -1,10 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
   ClipboardCopy,
   Loader2,
   Play,
+  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,6 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { useExecuteQuery } from "@/hooks/useDatabase";
 import type { QueryResult } from "@/hooks/useDatabase";
 import { useSchema } from "./SchemaContext";
+import { apiClient, ApiError } from "@/lib/api";
+
+interface ValidateResult {
+  valid: boolean;
+  error?: string | null;
+}
 
 const EXAMPLES = [
   { label: "Tabelas", sql: "SELECT table_name, table_type\nFROM information_schema.tables\nWHERE table_schema = 'company'\nORDER BY table_name" },
@@ -20,12 +27,26 @@ const EXAMPLES = [
   { label: "Tasks recentes", sql: "SELECT title, status, created_at\nFROM company.tasks\nORDER BY created_at DESC\nLIMIT 20" },
 ];
 
+type ValidationState = "idle" | "checking" | "valid" | "invalid";
+
+function ValidationIcon({ state, error }: { state: ValidationState; error: string | null }) {
+  if (state === "checking")
+    return <span title="Validando sintaxe…"><Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" /></span>;
+  if (state === "valid")
+    return <span title="Sintaxe válida"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /></span>;
+  if (state === "invalid")
+    return <span title={error ?? "Erro de sintaxe"}><XCircle className="h-3.5 w-3.5 text-destructive shrink-0" /></span>;
+  return null;
+}
+
 function ResultsTable({ result }: { result: QueryResult }) {
   const [copied, setCopied] = useState(false);
 
   const copyCSV = () => {
     const header = result.columns.join(",");
-    const body = result.rows.map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const body = result.rows
+      .map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(","))
+      .join("\n");
     navigator.clipboard.writeText(`${header}\n${body}`);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -33,18 +54,18 @@ function ResultsTable({ result }: { result: QueryResult }) {
 
   return (
     <>
-      {/* Sticky header bar */}
       <div className="flex items-center gap-3 px-3 py-1.5 border-b border-border bg-muted/20 sticky top-0 z-10">
         <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
         <span className="text-xs text-muted-foreground flex-1">
           {result.row_count.toLocaleString()} linha(s) · {result.elapsed_ms.toFixed(1)} ms
-          {result.truncated && <span className="ml-2 text-amber-600 font-medium">(truncado em 500 linhas)</span>}
+          {result.truncated && (
+            <span className="ml-2 text-amber-600 font-medium">(truncado em 500 linhas)</span>
+          )}
         </span>
         <Button size="sm" variant="ghost" className="h-6 px-2 gap-1 text-xs" onClick={copyCSV}>
           <ClipboardCopy className="h-3 w-3" /> {copied ? "Copiado!" : "CSV"}
         </Button>
       </div>
-      {/* Table — outer div handles scroll */}
       <table className="w-full text-xs border-collapse">
         <thead className="sticky top-[33px] z-10">
           <tr className="bg-muted/80">
@@ -85,8 +106,46 @@ export default function QueryPage() {
   const [sql, setSql] = useState(EXAMPLES[0].sql);
   const [result, setResult] = useState<QueryResult | null>(null);
   const [queryError, setQueryError] = useState<string | null>(null);
+  const [validationState, setValidationState] = useState<ValidationState>("idle");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const executeMut = useExecuteQuery();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Debounced syntax validation — runs EXPLAIN without executing
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (!sql.trim()) {
+      setValidationState("idle");
+      setValidationError(null);
+      return;
+    }
+    setValidationState("checking");
+    timerRef.current = setTimeout(async () => {
+      try {
+        const r = await apiClient.post<ValidateResult>("/api/v1/database/validate", {
+          sql,
+          instance,
+          db,
+          schema,
+        });
+        if (r.valid) {
+          setValidationState("valid");
+          setValidationError(null);
+        } else {
+          setValidationState("invalid");
+          setValidationError(r.error ?? "Erro de sintaxe");
+        }
+      } catch {
+        // Network/unexpected error — don't block the user
+        setValidationState("idle");
+        setValidationError(null);
+      }
+    }, 600);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [sql, instance, db, schema]);
 
   const run = async () => {
     if (!sql.trim()) return;
@@ -96,7 +155,13 @@ export default function QueryPage() {
       const r = await executeMut.mutateAsync({ sql, instance, db, schema });
       setResult(r);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      // Extract the real DB error from the response body's `detail` field
+      let msg: string;
+      if (err instanceof ApiError && err.body && typeof err.body === "object") {
+        msg = (err.body as { detail?: string }).detail ?? err.message;
+      } else {
+        msg = err instanceof Error ? err.message : String(err);
+      }
       setQueryError(msg);
     }
   };
@@ -113,16 +178,27 @@ export default function QueryPage() {
       {/* Editor */}
       <div className="flex flex-col gap-2 shrink-0">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex-1">SQL Editor</span>
-          <span className="text-[10px] text-muted-foreground">Ctrl+Enter para executar · somente SELECT/WITH/EXPLAIN</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">SQL Editor</span>
+          <ValidationIcon state={validationState} error={validationError} />
+          <span className="flex-1" />
+          <span className="text-[10px] text-muted-foreground">
+            Ctrl+Enter para executar · somente SELECT/WITH/EXPLAIN
+          </span>
           <div className="flex gap-1">
             {EXAMPLES.map((ex) => (
-              <Button key={ex.label} size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setSql(ex.sql)}>
+              <Button
+                key={ex.label}
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-xs"
+                onClick={() => setSql(ex.sql)}
+              >
                 {ex.label}
               </Button>
             ))}
           </div>
         </div>
+
         <div className="relative">
           <Textarea
             ref={textareaRef}
@@ -135,6 +211,15 @@ export default function QueryPage() {
             spellCheck={false}
           />
         </div>
+
+        {/* Inline syntax error (before execution) */}
+        {validationState === "invalid" && validationError && (
+          <p className="flex items-start gap-1.5 text-xs text-destructive font-mono">
+            <XCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            {validationError}
+          </p>
+        )}
+
         <div className="flex items-center gap-2">
           <Button
             size="sm"
@@ -161,7 +246,7 @@ export default function QueryPage() {
         </div>
       </div>
 
-      {/* Results */}
+      {/* Results area */}
       {!result && !queryError && (
         <div className="flex items-center justify-center rounded-lg border border-border bg-muted/10 py-12">
           <p className="text-xs text-muted-foreground">Execute uma query para ver os resultados</p>
@@ -176,7 +261,10 @@ export default function QueryPage() {
         </div>
       )}
       {result && (
-        <div className="rounded-lg border border-border overflow-hidden" style={{ maxHeight: "calc(100vh - 340px)", overflowY: "auto" }}>
+        <div
+          className="rounded-lg border border-border overflow-hidden"
+          style={{ maxHeight: "calc(100vh - 340px)", overflowY: "auto" }}
+        >
           <ResultsTable result={result} />
         </div>
       )}

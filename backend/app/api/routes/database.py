@@ -176,6 +176,18 @@ class QueryResult(BaseModel):
     truncated: bool
 
 
+class ValidateRequest(BaseModel):
+    sql: str
+    instance: str = "company_postgres"
+    db: str = "forgehub"
+    schema: str = SCHEMA
+
+
+class ValidateResult(BaseModel):
+    valid: bool
+    error: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -380,6 +392,41 @@ async def get_schema(
             foreign_keys=fk_map.get(tbl, []),
         ))
     return SchemaOut(tables=result)
+
+
+@router.post("/validate", response_model=ValidateResult)
+async def validate_query(payload: ValidateRequest) -> ValidateResult:
+    """Parse-check SQL using EXPLAIN — never executes, returns {valid, error}.
+
+    Always returns HTTP 200 so the frontend can consume the result directly.
+    """
+    sql = payload.sql.strip()
+    if not sql:
+        return ValidateResult(valid=False, error="Query vazia")
+    if not _ALLOWED_STARTS.match(sql):
+        return ValidateResult(valid=False, error="Somente SELECT, WITH e EXPLAIN são permitidos")
+
+    factory = _get_session_factory(payload.instance, payload.db)
+    # If the user already typed EXPLAIN, run as-is; otherwise prepend it.
+    if re.match(r"^\s*explain\b", sql, re.IGNORECASE):
+        explain_sql = sql
+    else:
+        explain_sql = f"EXPLAIN (FORMAT TEXT) {sql}"
+
+    try:
+        async with factory() as session:
+            await session.execute(text(f"SET search_path TO {payload.schema}, public"))
+            await session.execute(text(explain_sql))
+        return ValidateResult(valid=True)
+    except Exception as exc:
+        # Walk to the root asyncpg exception which has a clean .message attr
+        cause: BaseException = exc
+        while getattr(cause, "__cause__", None):
+            cause = cause.__cause__  # type: ignore[assignment]
+        msg = str(getattr(cause, "message", None) or cause)
+        # Strip SQLAlchemy boilerplate prefix if present
+        msg = re.sub(r"^\(.*?\) ", "", msg).strip()
+        return ValidateResult(valid=False, error=msg or "Erro de sintaxe")
 
 
 @router.post("/query", response_model=QueryResult)
