@@ -3,12 +3,14 @@ import { Loader2, Plus, Pencil, Trash2, ShieldCheck, ShieldOff, User } from "luc
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { useUsers, useDeleteUser } from "@/hooks/useAuth";
+import { useUsers, useDeleteUser, useProfiles } from "@/hooks/useAuth";
 import { useAuthStore } from "@/store/authStore";
 import UserForm from "./UserForm";
 
 export default function UsersPage() {
   const { data: users, isLoading } = useUsers();
+  const { data: profiles } = useProfiles();
+  const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p.name]));
   const deleteMut = useDeleteUser();
   const currentUser = useAuthStore((s) => s.user);
   const [editing, setEditing] = useState<string | null>(null);
@@ -50,6 +52,7 @@ export default function UsersPage() {
                   <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Nome</th>
                   <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">E-mail</th>
                   <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Papel</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Perfil</th>
                   <th className="px-4 py-2.5 text-left font-medium text-muted-foreground">Status</th>
                   <th className="px-4 py-2.5" />
                 </tr>
@@ -76,6 +79,14 @@ export default function UsersPage() {
                             <ShieldOff className="h-3 w-3" /> Usuário
                           </Badge>
                         )}
+                      </td>
+                      <td className="px-4 py-2.5 text-muted-foreground text-sm">
+                        {u.is_admin
+                          ? <span className="italic text-xs">— (super admin)</span>
+                          : u.profile_id
+                            ? profileMap[u.profile_id] ?? <span className="italic text-xs text-muted-foreground/60">carregando…</span>
+                            : <span className="italic text-xs text-muted-foreground/60">sem perfil</span>
+                        }
                       </td>
                       <td className="px-4 py-2.5">
                         <Badge variant={u.is_active ? "outline" : "secondary"}
@@ -107,7 +118,7 @@ export default function UsersPage() {
                     </tr>
                     {editing === u.id && (
                       <tr key={`edit-${u.id}`}>
-                        <td colSpan={6} className="px-4 py-3 bg-muted/10">
+                        <td colSpan={7} className="px-4 py-3 bg-muted/10">
                           <UserForm user={u} onClose={() => setEditing(null)} />
                         </td>
                       </tr>
