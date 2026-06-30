@@ -116,6 +116,7 @@ export const projectTaskSchema = z.object({
   change_request_id: z.string().nullable().optional(),
   project_id: z.string().nullable().optional(),
   parent_task_id: z.string().nullable().optional(),
+  policy_id: z.string().nullable().optional(),
   title: z.string(),
   description: z.string().nullable().optional(),
   status: z.enum(TASK_STATUSES).default("planned"),
@@ -144,6 +145,7 @@ const _taskBaseSchema = z.object({
   planning_item_id: z.string().optional().or(z.literal("")),
   change_request_id: z.string().optional().or(z.literal("")),
   parent_task_id: z.string().optional().or(z.literal("")),
+  policy_id: z.string().optional().or(z.literal("")),
   status: z.enum(TASK_STATUSES).default("planned"),
   priority: z.enum(TASK_PRIORITIES).default("medium"),
   estimated_cost: z
@@ -196,6 +198,15 @@ export function useTasksByChangeRequest(changeRequestId: string | undefined) {
     queryFn: () =>
       apiClient.get<ProjectTask[]>(`/api/v1/tasks?change_request_id=${changeRequestId}`),
     enabled: Boolean(changeRequestId),
+  });
+}
+
+export function useTasksByPolicy(policyId: string | undefined) {
+  return useQuery({
+    queryKey: ["tasks", "by-policy", policyId ?? ""],
+    queryFn: () =>
+      apiClient.get<ProjectTask[]>(`/api/v1/tasks?policy_id=${policyId}`),
+    enabled: Boolean(policyId),
   });
 }
 

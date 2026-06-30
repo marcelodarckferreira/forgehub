@@ -44,6 +44,7 @@ class ProjectTaskBase(BaseModel):
     estimated_cost: float | None = None
     planned_start_date: date | None = None
     planned_end_date: date | None = None
+    policy_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def _validate_choices(self) -> "ProjectTaskBase":
@@ -77,6 +78,7 @@ class ProjectTaskUpdate(BaseModel):
     parent_task_id: uuid.UUID | None = None
     planning_item_id: uuid.UUID | None = None
     change_request_id: uuid.UUID | None = None
+    policy_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def _validate_choices(self) -> "ProjectTaskUpdate":
@@ -95,6 +97,7 @@ class ProjectTaskOut(ProjectTaskBase):
     id: uuid.UUID
     planning_item_id: uuid.UUID | None = None
     change_request_id: uuid.UUID | None = None
+    policy_id: uuid.UUID | None = None
     status: str
     actual_cost: float | None = None
     started_at: datetime | None = None

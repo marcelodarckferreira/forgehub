@@ -107,6 +107,14 @@ class ProjectTask(Base, TimestampMixin):
     # be idempotent: create on first sync, update/move on subsequent ones.
     kanboard_task_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Governance: optional link to the Policy this task is implementing.
+    # Lets a Policy page show all tasks contributing to its compliance.
+    policy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("company.policies.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     __table_args__ = (
         CheckConstraint(f"status IN {TASK_STATUSES!r}", name="ck_project_tasks_status"),
     )

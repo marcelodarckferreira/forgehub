@@ -11,10 +11,11 @@ import {
   TASK_STATUSES,
   taskCreateSchema,
   type TaskCreateInput,
+  useTasks,
 } from "@/hooks/useTask";
 import { usePlanningItems } from "@/hooks/useBacklog";
 import { useChangeRequests, useProjects } from "@/hooks/useProject";
-import { useTasks } from "@/hooks/useTask";
+import { usePolicies } from "@/hooks/useGovernance";
 
 interface TaskFormProps {
   defaultValues?: Partial<TaskCreateInput>;
@@ -47,6 +48,7 @@ export function TaskForm({
       planning_item_id: "",
       change_request_id: "",
       parent_task_id: "",
+      policy_id: "",
       status: "planned",
       priority: "medium",
       due_date: "",
@@ -58,6 +60,7 @@ export function TaskForm({
   const { data: planningItems, isLoading: isLoadingPlanningItems } = usePlanningItems();
   const { data: changeRequests, isLoading: isLoadingCRs } = useChangeRequests(projectId ?? defaultValues?.project_id);
   const { data: allTasks, isLoading: isLoadingTasks } = useTasks();
+  const { data: policies } = usePolicies();
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -189,6 +192,21 @@ export function TaskForm({
           </Select>
           {errors.priority && <p className="text-sm text-destructive">{errors.priority.message}</p>}
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="policy_id">Política de governança (opcional)</Label>
+        <Select id="policy_id" {...register("policy_id")}>
+          <option value="">Sem política vinculada</option>
+          {(policies ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
+        {errors.policy_id && (
+          <p className="text-sm text-destructive">{errors.policy_id.message}</p>
+        )}
       </div>
 
       <div className="flex justify-end gap-2 pt-2">

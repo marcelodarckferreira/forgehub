@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AlertCircle, Loader2, Plus, Pencil, Trash2, ShieldCheck } from "lucide-react";
+import { AlertCircle, CheckSquare, Loader2, Plus, Pencil, Trash2, ShieldCheck } from "lucide-react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
+import { Badge, Badge as StatusBadge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import {
   Card,
@@ -33,6 +33,7 @@ import {
   type PolicyInput,
 } from "@/hooks/useGovernance";
 import { useArtifacts } from "@/hooks/useArtifact";
+import { useTasksByPolicy } from "@/hooks/useTask";
 
 const policyFormSchema = z.object({
   name: z.string().min(1, "Nome obrigatório").max(200),
@@ -138,6 +139,7 @@ export default function PoliciesPage() {
   const deletePolicy = useDeletePolicy();
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   function handleCreate(values: PolicyFormValues) {
     const payload: PolicyInput = {
@@ -217,6 +219,7 @@ export default function PoliciesPage() {
                   <TableHead>Artefato</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Descrição</TableHead>
+                  <TableHead>Tasks</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
@@ -240,6 +243,17 @@ export default function PoliciesPage() {
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-sm truncate">
                         {policy.description ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-xs gap-1"
+                          onClick={() => setExpandedId(expandedId === policy.id ? null : policy.id)}
+                        >
+                          <CheckSquare className="h-3.5 w-3.5" />
+                          {expandedId === policy.id ? "Ocultar" : "Ver tasks"}
+                        </Button>
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
@@ -265,9 +279,16 @@ export default function PoliciesPage() {
                         </div>
                       </TableCell>
                     </TableRow>
+                    {expandedId === policy.id && (
+                      <TableRow key={`tasks-${policy.id}`}>
+                        <TableCell colSpan={7} className="bg-muted/10 px-6 py-3">
+                          <PolicyTasksRow policyId={policy.id} />
+                        </TableCell>
+                      </TableRow>
+                    )}
                     {editingId === policy.id && (
                       <TableRow key={`edit-${policy.id}`}>
-                        <TableCell colSpan={6} className="bg-muted/20 p-4">
+                        <TableCell colSpan={7} className="bg-muted/20 p-4">
                           <EditPolicyRow
                             policy={policy}
                             onDone={() => setEditingId(null)}
@@ -282,6 +303,39 @@ export default function PoliciesPage() {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+function PolicyTasksRow({ policyId }: { policyId: string }) {
+  const { data: tasks, isLoading } = useTasksByPolicy(policyId);
+
+  if (isLoading) return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+      <Loader2 className="h-3 w-3 animate-spin" /> Carregando tasks…
+    </div>
+  );
+  if (!tasks || tasks.length === 0) return (
+    <p className="text-xs text-muted-foreground py-2 italic">Nenhuma task vinculada a esta política.</p>
+  );
+
+  return (
+    <div className="space-y-1 py-1">
+      <p className="text-xs font-semibold text-muted-foreground mb-2">Tasks implementando esta política</p>
+      <div className="space-y-1">
+        {tasks.map((t) => (
+          <div key={t.id} className="flex items-center gap-2 text-sm">
+            <StatusBadge variant={
+              t.status === "done" || t.status === "deployed" ? "success" :
+              t.status === "in_progress" ? "default" :
+              t.status === "blocked" ? "destructive" : "secondary"
+            } className="text-xs shrink-0">
+              {t.status.replace("_", " ")}
+            </StatusBadge>
+            <span className="truncate">{t.title}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

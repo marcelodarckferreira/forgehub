@@ -186,6 +186,7 @@ async def list_tasks(
     planning_item_id: uuid.UUID | None = None,
     change_request_id: uuid.UUID | None = None,
     parent_task_id: uuid.UUID | None = None,
+    policy_id: uuid.UUID | None = None,
     db: AsyncSession = Depends(get_db),
 ) -> list[ProjectTask]:
     stmt = select(ProjectTask)
@@ -197,6 +198,8 @@ async def list_tasks(
         stmt = stmt.where(ProjectTask.change_request_id == change_request_id)
     if parent_task_id is not None:
         stmt = stmt.where(ProjectTask.parent_task_id == parent_task_id)
+    if policy_id is not None:
+        stmt = stmt.where(ProjectTask.policy_id == policy_id)
     result = await db.execute(stmt.order_by(ProjectTask.created_at))
     return list(result.scalars().all())
 
