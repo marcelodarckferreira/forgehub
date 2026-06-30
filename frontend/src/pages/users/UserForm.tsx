@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +11,44 @@ interface Props {
   onClose: () => void;
 }
 
+function PasswordInput({
+  value,
+  onChange,
+  required,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  required?: boolean;
+  placeholder?: string;
+}) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="relative">
+      <Input
+        type={show ? "text" : "password"}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        required={required}
+        placeholder={placeholder}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+        tabIndex={-1}
+      >
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+  );
+}
+
 export default function UserForm({ user, onClose }: Props) {
   const [username, setUsername] = useState(user?.username ?? "");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [email, setEmail] = useState(user?.email ?? "");
   const [fullName, setFullName] = useState(user?.full_name ?? "");
   const [isAdmin, setIsAdmin] = useState(user?.is_admin ?? false);
@@ -26,14 +61,20 @@ export default function UserForm({ user, onClose }: Props) {
   const isPending = createMut.isPending || updateMut.isPending;
   const error = createMut.error ?? updateMut.error;
 
+  const passwordRequired = !user;
+  const passwordFilled = password.length > 0;
+  const confirmMismatch = passwordFilled && confirm !== password;
+  const canSubmit = !isPending && (!passwordFilled || !confirmMismatch);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (confirmMismatch) return;
     try {
       if (user) {
         await updateMut.mutateAsync({
           id: user.id,
           body: {
-            ...(password ? { password } : {}),
+            ...(passwordFilled ? { password } : {}),
             email: email || undefined,
             full_name: fullName || undefined,
             is_admin: isAdmin,
@@ -62,27 +103,53 @@ export default function UserForm({ user, onClose }: Props) {
       {!user && (
         <div className="flex flex-col gap-1">
           <Label>Usuário *</Label>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} required placeholder="jdoe" />
+          <Input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            placeholder="jdoe"
+          />
         </div>
       )}
+
       <div className="flex flex-col gap-1">
         <Label>{user ? "Nova senha (opcional)" : "Senha *"}</Label>
-        <Input
-          type="password"
+        <PasswordInput
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required={!user}
+          onChange={setPassword}
+          required={passwordRequired}
           placeholder={user ? "deixar em branco para manter" : "••••••••"}
         />
       </div>
+
+      <div className="flex flex-col gap-1">
+        <Label>
+          Confirmar senha
+          {!passwordRequired && !passwordFilled && (
+            <span className="ml-1 text-muted-foreground font-normal text-xs">(opcional)</span>
+          )}
+        </Label>
+        <PasswordInput
+          value={confirm}
+          onChange={setConfirm}
+          required={passwordRequired || passwordFilled}
+          placeholder="••••••••"
+        />
+        {confirmMismatch && (
+          <p className="text-xs text-destructive">As senhas não coincidem</p>
+        )}
+      </div>
+
       <div className="flex flex-col gap-1">
         <Label>Nome completo</Label>
         <Input value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="João da Silva" />
       </div>
+
       <div className="flex flex-col gap-1">
         <Label>E-mail</Label>
         <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="joao@exemplo.com" />
       </div>
+
       <div className="flex items-center gap-4 col-span-2">
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
@@ -97,6 +164,17 @@ export default function UserForm({ user, onClose }: Props) {
           <span className="text-sm font-medium">Super Admin</span>
         </label>
         <span className="text-xs text-muted-foreground">acesso total, bypassa perfis</span>
+        {user && (
+          <label className="flex items-center gap-2 cursor-pointer select-none ml-4">
+            <input
+              type="checkbox"
+              checked={isActive}
+              onChange={(e) => setIsActive(e.target.checked)}
+              className="h-4 w-4 rounded border-border"
+            />
+            <span className="text-sm">Ativo</span>
+          </label>
+        )}
       </div>
 
       {!isAdmin && (
@@ -116,25 +194,11 @@ export default function UserForm({ user, onClose }: Props) {
         </div>
       )}
 
-      <div className="flex items-center gap-4 col-span-2">
-        {user && (
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={isActive}
-              onChange={(e) => setIsActive(e.target.checked)}
-              className="h-4 w-4 rounded border-border"
-            />
-            <span className="text-sm">Ativo</span>
-          </label>
-        )}
-      </div>
-
       {error && <p className="col-span-2 text-xs text-destructive">{error.message}</p>}
 
       <div className="col-span-2 flex gap-2 justify-end">
         <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancelar</Button>
-        <Button type="submit" size="sm" disabled={isPending} className="gap-1.5">
+        <Button type="submit" size="sm" disabled={!canSubmit} className="gap-1.5">
           {isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           Salvar
         </Button>
