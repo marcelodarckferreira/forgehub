@@ -171,20 +171,23 @@ function StageCard({
         {editing ? (
           <div className="mt-2 flex flex-col gap-2">
             <div className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Tipo</span>
-              <Select className="h-7 text-xs" value={editType} onChange={(e) => setEditType(e.target.value as typeof STAGE_TYPES[number])}>
-
+              <span className="text-xs text-muted-foreground">Type</span>
+              <select
+                value={editType}
+                onChange={(e) => setEditType(e.target.value as typeof STAGE_TYPES[number])}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
                 {STAGE_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-              </Select>
+              </select>
             </div>
             <div className="flex gap-4">
               <label className="flex items-center gap-1.5 text-xs">
                 <input type="checkbox" checked={editApproval} onChange={(e) => setEditApproval(e.target.checked)} className="h-3.5 w-3.5" />
-                Aprovação
+                Requires approval
               </label>
               <label className="flex items-center gap-1.5 text-xs">
                 <input type="checkbox" checked={editVerif} onChange={(e) => setEditVerif(e.target.checked)} className="h-3.5 w-3.5" />
-                Verificação
+                Requires verification
               </label>
             </div>
           </div>
