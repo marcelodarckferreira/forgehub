@@ -71,15 +71,15 @@ export default function ProfilesPage() {
             )}
 
             {/* Permissions matrix — hidden while edit form is open */}
-            {editing !== profile.id && <div className="overflow-x-auto">
+            {editing !== profile.id && <div className="overflow-x-auto overflow-y-auto max-h-48">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-border/50">
-                    <th className="px-3 py-2 text-left font-medium text-muted-foreground w-40">Módulo</th>
-                    <th className="px-3 py-2 text-center font-medium text-muted-foreground">Visualizar</th>
-                    <th className="px-3 py-2 text-center font-medium text-muted-foreground">Consultar</th>
-                    <th className="px-3 py-2 text-center font-medium text-muted-foreground">Gravar</th>
-                    <th className="px-3 py-2 text-center font-medium text-muted-foreground">Excluir</th>
+                  <tr className="sticky top-0 z-10 border-b border-border/50">
+                    <th className="px-3 py-2 text-left font-medium text-muted-foreground w-40" style={{ backgroundColor: "hsl(var(--card))" }}>Módulo</th>
+                    <th className="px-3 py-2 text-center font-medium text-muted-foreground" style={{ backgroundColor: "hsl(var(--card))" }}>Visualizar</th>
+                    <th className="px-3 py-2 text-center font-medium text-muted-foreground" style={{ backgroundColor: "hsl(var(--card))" }}>Consultar</th>
+                    <th className="px-3 py-2 text-center font-medium text-muted-foreground" style={{ backgroundColor: "hsl(var(--card))" }}>Gravar</th>
+                    <th className="px-3 py-2 text-center font-medium text-muted-foreground" style={{ backgroundColor: "hsl(var(--card))" }}>Excluir</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/30">
