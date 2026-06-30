@@ -9,9 +9,12 @@ import {
   CircleDashed,
   Loader2,
   Lock,
+  Pencil,
   Plus,
+  Save,
   ShieldCheck,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,6 +69,13 @@ function StageCard({
   pipelineId: string;
 }) {
   const [editStatus, setEditStatus] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(stage.name);
+  const [editType, setEditType] = useState<typeof STAGE_TYPES[number]>(
+    (stage.stage_type as typeof STAGE_TYPES[number]) ?? "implementation",
+  );
+  const [editApproval, setEditApproval] = useState(stage.requires_approval);
+  const [editVerif, setEditVerif] = useState(stage.requires_verification);
   const artifacts = stage.required_artifacts ?? [];
   const gates = stage.gates ?? [];
   const isBlocked = stage.status === "blocked";
@@ -73,17 +83,36 @@ function StageCard({
   const updateStage = useUpdateStage(pipelineId, stage.id);
   const deleteStage = useDeleteStage(pipelineId);
 
+  const saveEdit = () => {
+    updateStage.mutate(
+      { name: editName, stage_type: editType, requires_approval: editApproval, requires_verification: editVerif },
+      { onSuccess: () => setEditing(false) },
+    );
+  };
+
+  const openEdit = () => {
+    setEditName(stage.name);
+    setEditType((stage.stage_type as typeof STAGE_TYPES[number]) ?? "implementation");
+    setEditApproval(stage.requires_approval);
+    setEditVerif(stage.requires_verification);
+    setEditing(true);
+  };
+
   return (
     <Card className={cn(isBlocked && "border-destructive/50")}>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
               {stage.order ?? index + 1}
             </span>
-            <CardTitle className="text-base leading-tight">{stage.name}</CardTitle>
+            {editing ? (
+              <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="h-7 text-sm font-medium" />
+            ) : (
+              <CardTitle className="text-base leading-tight truncate">{stage.name}</CardTitle>
+            )}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {editStatus ? (
               <Select
                 className="h-7 text-xs"
@@ -106,31 +135,69 @@ function StageCard({
                 variant={STAGE_STATUS_VARIANT[stage.status] ?? "outline"}
                 className="cursor-pointer"
                 onClick={() => setEditStatus(true)}
-                title="Click to change status"
+                title="Clique para alterar status"
               >
                 {stage.status.replace("_", " ")}
               </Badge>
             )}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 w-7 p-0"
-              disabled={deleteStage.isPending}
-              onClick={() => deleteStage.mutate(stage.id)}
-              aria-label={`Delete stage ${stage.name}`}
-            >
-              <Trash2 className="h-3.5 w-3.5 text-destructive" />
-            </Button>
+            {editing ? (
+              <>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={saveEdit} disabled={updateStage.isPending}>
+                  {updateStage.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5 text-primary" />}
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => setEditing(false)}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={openEdit} aria-label={`Editar stage ${stage.name}`}>
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  disabled={deleteStage.isPending}
+                  onClick={() => deleteStage.mutate(stage.id)}
+                  aria-label={`Excluir stage ${stage.name}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                </Button>
+              </>
+            )}
           </div>
         </div>
-        {stage.stage_type && (
-          <CardDescription className="capitalize">
-            {stage.stage_type.replace(/_/g, " ")}
-          </CardDescription>
+        {editing ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Tipo</span>
+              <Select className="h-7 text-xs" value={editType} onChange={(e) => setEditType(e.target.value as typeof STAGE_TYPES[number])}>
+
+                {STAGE_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+              </Select>
+            </div>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-1.5 text-xs">
+                <input type="checkbox" checked={editApproval} onChange={(e) => setEditApproval(e.target.checked)} className="h-3.5 w-3.5" />
+                Aprovação
+              </label>
+              <label className="flex items-center gap-1.5 text-xs">
+                <input type="checkbox" checked={editVerif} onChange={(e) => setEditVerif(e.target.checked)} className="h-3.5 w-3.5" />
+                Verificação
+              </label>
+            </div>
+          </div>
+        ) : (
+          stage.stage_type && (
+            <CardDescription className="capitalize">
+              {stage.stage_type.replace(/_/g, " ")}
+            </CardDescription>
+          )
         )}
       </CardHeader>
       <CardContent className="space-y-4">
-        {(stage.requires_approval || stage.requires_verification) && (
+        {!editing && (stage.requires_approval || stage.requires_verification) && (
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             {stage.requires_approval && (
               <span className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5">

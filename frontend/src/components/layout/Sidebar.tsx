@@ -82,6 +82,7 @@ const NAV_SECTIONS: NavSectionEntry[] = [
           { to: "/product", label: "Products", icon: Package, module: "product" },
           { to: "/projects", label: "Projects", icon: FolderKanban, module: "projects" },
           { to: "/pipeline", label: "Pipelines", icon: GitBranch, module: "pipeline" },
+          { to: "/pipeline-templates", label: "Templates", icon: GitBranch, module: "pipeline" },
           { to: "/backlog", label: "Planning", icon: ClipboardList, module: "backlog" },
           { to: "/tasks", label: "Execution", icon: CheckSquare, module: "tasks" },
           { to: "/artifact", label: "Artifacts", icon: FileBox, module: "artifacts" },

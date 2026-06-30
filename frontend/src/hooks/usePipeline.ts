@@ -195,6 +195,85 @@ export function usePipelineTemplates() {
   });
 }
 
+export function useCreateTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { name: string; description?: string; is_active?: boolean }) =>
+      apiClient.post<PipelineTemplate>(`${RESOURCE}/templates`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pipelineKeys.templates }),
+  });
+}
+
+export function useUpdateTemplate(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { name?: string; description?: string; is_active?: boolean }) =>
+      apiClient.patch<PipelineTemplate>(`${RESOURCE}/templates/${id}`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pipelineKeys.templates }),
+  });
+}
+
+export function useDeleteTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<void>(`${RESOURCE}/templates/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pipelineKeys.templates }),
+  });
+}
+
+export interface TemplateStage {
+  id: string;
+  template_id: string;
+  name: string;
+  stage_type: string;
+  order_index: number;
+  requires_approval: boolean;
+  requires_verification: boolean;
+}
+
+export function useTemplateStages(templateId: string) {
+  return useQuery({
+    queryKey: ["template-stages", templateId],
+    queryFn: () => apiClient.get<TemplateStage[]>(`${RESOURCE}/template-stages`, { params: { template_id: templateId } }),
+    enabled: Boolean(templateId),
+  });
+}
+
+export function useCreateTemplateStage() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { template_id: string; name: string; stage_type: string; order_index: number; requires_approval?: boolean; requires_verification?: boolean }) =>
+      apiClient.post<TemplateStage>(`${RESOURCE}/template-stages`, payload),
+    onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: ["template-stages", vars.template_id] }),
+  });
+}
+
+export function useUpdateTemplateStage(templateId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: { id: string; name?: string; stage_type?: string; order_index?: number; requires_approval?: boolean; requires_verification?: boolean }) =>
+      apiClient.patch<TemplateStage>(`${RESOURCE}/template-stages/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["template-stages", templateId] }),
+  });
+}
+
+export function useDeleteTemplateStage(templateId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete<void>(`${RESOURCE}/template-stages/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["template-stages", templateId] }),
+  });
+}
+
+export function useImportPipelineAsTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { pipeline_id: string; name: string; description?: string }) =>
+      apiClient.post<PipelineTemplate>(`${RESOURCE}/import-as-template`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: pipelineKeys.templates }),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Stage CRUD
 // ---------------------------------------------------------------------------

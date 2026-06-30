@@ -32,6 +32,7 @@ import DatabaseDiagramPage from "@/pages/database/DiagramPage";
 import DatabaseQueryPage from "@/pages/database/QueryPage";
 import UsersPage from "@/pages/users";
 import ProfilesPage from "@/pages/profiles";
+import PipelineTemplatesPage from "@/pages/pipeline-templates";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="pipeline" element={<PipelinePage />} />
         <Route path="pipeline/:id" element={<PipelineDetailPage />} />
+        <Route path="pipeline-templates" element={<PipelineTemplatesPage />} />
         <Route path="backlog" element={<BacklogPage />} />
         <Route path="backlog/:id" element={<PlanningItemDetailPage />} />
         <Route path="tasks" element={<TaskPage />} />
