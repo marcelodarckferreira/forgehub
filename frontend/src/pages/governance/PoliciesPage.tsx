@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AlertCircle, Loader2, Plus, Pencil, Trash2, ShieldCheck } from "lucide-react";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Select } from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -31,12 +32,14 @@ import {
   type Policy,
   type PolicyInput,
 } from "@/hooks/useGovernance";
+import { useArtifacts } from "@/hooks/useArtifact";
 
 const policyFormSchema = z.object({
   name: z.string().min(1, "Nome obrigatório").max(200),
   description: z.string().max(2000).optional().or(z.literal("")),
   policy_type: z.string().min(1, "Tipo obrigatório").max(100),
   is_active: z.boolean().default(true),
+  entity_id: z.string().min(1, "Artefato obrigatório"),
 });
 
 type PolicyFormValues = z.infer<typeof policyFormSchema>;
@@ -54,9 +57,11 @@ function PolicyForm({
   isSubmitting?: boolean;
   submitLabel?: string;
 }) {
-  const { register, handleSubmit, formState: { errors } } = useForm<PolicyFormValues>({
+  const { data: artifacts } = useArtifacts();
+
+  const { register, handleSubmit, control, formState: { errors } } = useForm<PolicyFormValues>({
     resolver: zodResolver(policyFormSchema),
-    defaultValues: { name: "", description: "", policy_type: "", is_active: true, ...defaultValues },
+    defaultValues: { name: "", description: "", policy_type: "", is_active: true, entity_id: "", ...defaultValues },
   });
 
   return (
@@ -73,6 +78,26 @@ function PolicyForm({
           {errors.policy_type && <p className="text-xs text-destructive">{errors.policy_type.message}</p>}
         </div>
       </div>
+
+      <div className="space-y-2">
+        <Label>Artefato vinculado</Label>
+        <Controller
+          control={control}
+          name="entity_id"
+          render={({ field }) => (
+            <Select value={field.value} onChange={(e) => field.onChange(e.target.value)}>
+              <option value="">Selecione um artefato…</option>
+              {(artifacts ?? []).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </Select>
+          )}
+        />
+        {errors.entity_id && <p className="text-xs text-destructive">{errors.entity_id.message}</p>}
+      </div>
+
       <div className="space-y-2">
         <Label>Descrição</Label>
         <Textarea
@@ -81,10 +106,12 @@ function PolicyForm({
           {...register("description")}
         />
       </div>
+
       <div className="flex items-center gap-2">
         <input type="checkbox" id="is_active" {...register("is_active")} className="rounded" />
         <Label htmlFor="is_active" className="cursor-pointer">Ativa</Label>
       </div>
+
       <div className="flex justify-end gap-2 pt-2">
         <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
           Cancelar
@@ -98,15 +125,27 @@ function PolicyForm({
   );
 }
 
+function ArtifactName({ artifactId, artifacts }: { artifactId: string | null | undefined; artifacts: { id: string; name: string }[] }) {
+  if (!artifactId) return <>—</>;
+  const found = artifacts.find((a) => a.id === artifactId);
+  return <>{found?.name ?? artifactId.slice(0, 8) + "…"}</>;
+}
+
 export default function PoliciesPage() {
   const { data: policies, isLoading, isError } = usePolicies();
+  const { data: artifacts } = useArtifacts();
   const createPolicy = useCreatePolicy();
   const deletePolicy = useDeletePolicy();
   const [showCreate, setShowCreate] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   function handleCreate(values: PolicyFormValues) {
-    createPolicy.mutate(values as PolicyInput, { onSuccess: () => setShowCreate(false) });
+    const payload: PolicyInput = {
+      ...values,
+      entity_type: "artifact",
+      entity_id: values.entity_id as unknown as undefined,
+    };
+    createPolicy.mutate(payload, { onSuccess: () => setShowCreate(false) });
   }
 
   return (
@@ -115,7 +154,7 @@ export default function PoliciesPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Políticas de Governança</h1>
           <p className="text-muted-foreground">
-            Regras que definem critérios de aprovação para transições controladas.
+            Regras de negócio vinculadas a artefatos — definem critérios de aprovação para transições controladas.
           </p>
         </div>
         <Button onClick={() => { setShowCreate(true); setEditingId(null); }}>
@@ -127,7 +166,7 @@ export default function PoliciesPage() {
         <Card>
           <CardHeader>
             <CardTitle>Nova política</CardTitle>
-            <CardDescription>Define um critério ou regra de aprovação reutilizável.</CardDescription>
+            <CardDescription>Vincula uma regra de aprovação a um artefato específico.</CardDescription>
           </CardHeader>
           <CardContent>
             <PolicyForm
@@ -175,6 +214,7 @@ export default function PoliciesPage() {
                 <TableRow>
                   <TableHead>Nome</TableHead>
                   <TableHead>Tipo</TableHead>
+                  <TableHead>Artefato</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Descrição</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
@@ -189,6 +229,9 @@ export default function PoliciesPage() {
                         <span className="font-mono text-xs text-muted-foreground">
                           {policy.policy_type}
                         </span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        <ArtifactName artifactId={policy.entity_id?.toString()} artifacts={artifacts ?? []} />
                       </TableCell>
                       <TableCell>
                         <Badge variant={policy.is_active ? "success" : "secondary"}>
@@ -224,7 +267,7 @@ export default function PoliciesPage() {
                     </TableRow>
                     {editingId === policy.id && (
                       <TableRow key={`edit-${policy.id}`}>
-                        <TableCell colSpan={5} className="bg-muted/20 p-4">
+                        <TableCell colSpan={6} className="bg-muted/20 p-4">
                           <EditPolicyRow
                             policy={policy}
                             onDone={() => setEditingId(null)}
@@ -246,7 +289,12 @@ export default function PoliciesPage() {
 function EditPolicyRow({ policy, onDone }: { policy: Policy; onDone: () => void }) {
   const updatePolicy = useUpdatePolicy(policy.id);
   function handleUpdate(values: PolicyFormValues) {
-    updatePolicy.mutate(values as PolicyInput, { onSuccess: onDone });
+    const payload: PolicyInput = {
+      ...values,
+      entity_type: "artifact",
+      entity_id: values.entity_id as unknown as undefined,
+    };
+    updatePolicy.mutate(payload, { onSuccess: onDone });
   }
   return (
     <PolicyForm
@@ -255,6 +303,7 @@ function EditPolicyRow({ policy, onDone }: { policy: Policy; onDone: () => void 
         description: policy.description ?? "",
         policy_type: policy.policy_type,
         is_active: policy.is_active,
+        entity_id: policy.entity_id?.toString() ?? "",
       }}
       onSubmit={handleUpdate}
       onCancel={onDone}

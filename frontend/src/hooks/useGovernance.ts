@@ -76,6 +76,8 @@ export const policySchema = z.object({
   policy_type: z.string(),
   rules: z.record(z.unknown()).nullable().optional(),
   is_active: z.boolean().default(true),
+  entity_type: z.string().nullable().optional(),
+  entity_id: z.string().nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
 });
@@ -205,6 +207,8 @@ export interface PolicyInput {
   policy_type: string;
   rules?: Record<string, unknown>;
   is_active?: boolean;
+  entity_type?: string;
+  entity_id?: string;
 }
 
 export function useCreatePolicy() {
