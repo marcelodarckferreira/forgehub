@@ -83,29 +83,40 @@ export default function UserForm({ user, onClose }: Props) {
         <Label>E-mail</Label>
         <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="joao@exemplo.com" />
       </div>
-      <div className="flex flex-col gap-1 col-span-2">
-        <Label>Perfil de Acesso</Label>
-        <select
-          value={profileId}
-          onChange={(e) => setProfileId(e.target.value)}
-          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
-        >
-          <option value="">— sem perfil —</option>
-          {profiles?.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      </div>
       <div className="flex items-center gap-4 col-span-2">
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={isAdmin}
-            onChange={(e) => setIsAdmin(e.target.checked)}
+            onChange={(e) => {
+              setIsAdmin(e.target.checked);
+              if (e.target.checked) setProfileId("");
+            }}
             className="h-4 w-4 rounded border-border"
           />
-          <span className="text-sm">Administrador</span>
+          <span className="text-sm font-medium">Super Admin</span>
         </label>
+        <span className="text-xs text-muted-foreground">acesso total, bypassa perfis</span>
+      </div>
+
+      {!isAdmin && (
+        <div className="flex flex-col gap-1 col-span-2">
+          <Label>Perfil de Acesso</Label>
+          <select
+            value={profileId}
+            onChange={(e) => setProfileId(e.target.value)}
+            className="flex h-9 w-full rounded-md border border-input px-3 py-1 text-sm shadow-sm text-foreground"
+            style={{ backgroundColor: "hsl(var(--background))" }}
+          >
+            <option value="">— sem perfil —</option>
+            {profiles?.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="flex items-center gap-4 col-span-2">
         {user && (
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
