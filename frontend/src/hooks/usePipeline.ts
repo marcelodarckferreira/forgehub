@@ -321,3 +321,12 @@ export function useDeleteStage(pipelineId: string) {
     },
   });
 }
+
+export function usePipelineGate(gateId: string | undefined) {
+  return useQuery({
+    queryKey: ["pipeline-gate", gateId],
+    queryFn: () => apiClient.get<StageGate>(`/api/v1/pipelines/gates/${gateId}`),
+    enabled: Boolean(gateId),
+    staleTime: 300_000,
+  });
+}

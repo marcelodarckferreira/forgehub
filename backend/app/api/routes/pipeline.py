@@ -717,6 +717,14 @@ async def list_stage_gates(stage_id: uuid.UUID, db: AsyncSession = Depends(get_d
     return list(result.scalars().all())
 
 
+@router.get("/gates/{gate_id}", response_model=PipelineStageGateOut)
+async def get_stage_gate(gate_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> PipelineStageGate:
+    gate = await db.get(PipelineStageGate, gate_id)
+    if gate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Gate not found")
+    return gate
+
+
 @router.patch("/gates/{gate_id}", response_model=PipelineStageGateOut)
 async def update_stage_gate(
     gate_id: uuid.UUID, payload: PipelineStageGateUpdate, db: AsyncSession = Depends(get_db)
