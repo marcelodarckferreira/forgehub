@@ -1,6 +1,13 @@
 # domain model modules are imported here by the wiring step
 from app.db.models.product import Product, ProductModule, ProductVersion, Release  # noqa: F401
-from app.db.models.project import Project, ProjectPlan, PlanBaseline, ChangeRequest  # noqa: F401
+from app.db.models.project import (  # noqa: F401
+    Project,
+    ProjectPlan,
+    PlanBaseline,
+    ChangeRequest,
+    ProjectStructureNode,
+    ProjectForgeRouterConfig,
+)
 from app.db.models.pipeline import (  # noqa: F401
     PipelineTemplate,
     PipelineTemplateStage,
@@ -38,3 +45,7 @@ from app.db.models.artifact import Artifact, ArtifactVersion  # noqa: F401
 from app.db.models.governance import Policy, Approval, AuditEvent  # noqa: F401
 from app.db.models.chat import ChatSession, ChatMessage  # noqa: F401
 from app.db.models.toolversions import ToolVersionStatus, ToolSyncSetting  # noqa: F401
+from app.db.models.cron_script import CronScript  # noqa: F401
+from app.db.models.deploy import DeployInstallation  # noqa: F401
+from app.db.models.profile import Profile, ProfilePermission  # noqa: F401
+from app.db.models.user import User  # noqa: F401

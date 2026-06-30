@@ -28,7 +28,7 @@ services:
       # Read-write: backs the Obsidian vault browser/editor
       # (api/routes/vault.py). Writes go straight to the same files the
       # desktop Obsidian app reads -- see that router's docstring.
-      - /root/.hermes/foundation/vault:/vault
+      - /root/.hermes/knowledge_base:/vault
       - /root/.hermes/profiles:/profiles
       - /root/.hermes/foundation/governance:/governance:ro
       - /root/.hermes/foundation/agents:/foundation-agents:ro
@@ -37,6 +37,18 @@ services:
       # Hermes agents operate under, so every read/write there resolves
       # against this root and is restricted to .md files only.
       - /root/.hermes/foundation:/foundation-root
+      # Read-write: backs the Crons/Scripts control pages
+      # (api/routes/foundation.py list_cron_jobs/list_scripts/delete_cron_job).
+      # This is the live `hermes cron` shared job store (jobs.json, #32091)
+      # AND the single-source-of-truth dir for the central scripts catalog
+      # symlinked into every profile's ~/.hermes/scripts/ -- same files the
+      # `hermes` CLI and gateway scheduler read/write, so deletes here use
+      # the same .jobs.lock advisory file lock they use.
+      - /root/.hermes/crons:/hermes-cron
+      # Main Hermes scripts catalog (/root/.hermes/scripts -- the canonical
+      # location for every ecosystem script; cron wrappers in /hermes-cron
+      # call scripts from here).
+      - /root/.hermes/scripts:/hermes-scripts
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
       interval: 10s

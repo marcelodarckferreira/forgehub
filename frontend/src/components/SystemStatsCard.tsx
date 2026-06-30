@@ -76,11 +76,11 @@ export function SystemStatsCard() {
   const { data, isLoading, isError } = useSystemStats();
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="flex h-full flex-col">
+      <CardHeader className="pb-3">
         <CardTitle>System Resources</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="flex flex-1 flex-col justify-center space-y-4">
         {isLoading && (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />

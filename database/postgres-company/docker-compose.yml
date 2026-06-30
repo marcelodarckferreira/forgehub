@@ -10,7 +10,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
-      - /root/.hermes/foundation/data/postgres-company/pgdata:/var/lib/postgresql/data
+      - /root/.hermes/database/data/postgres-company/pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-foundation} -d ${POSTGRES_DB:-foundation_company}"]
       interval: 10s

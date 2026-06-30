@@ -42,17 +42,48 @@ function buildUrl(path: string, params?: RequestOptions["params"]) {
   return url.toString();
 }
 
+function getToken(): string | null {
+  try {
+    const raw = localStorage.getItem("forgehub-auth");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.state?.token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { body, params, headers, ...rest } = options;
+
+  const token = getToken();
+  const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
   const res = await fetch(buildUrl(path, params), {
     ...rest,
     headers: {
       "Content-Type": "application/json",
+      ...authHeader,
       ...headers,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+
+  if (res.status === 401) {
+    // Token expired or invalid — clear stored auth and redirect to login
+    try {
+      const raw = localStorage.getItem("forgehub-auth");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        parsed.state.token = null;
+        parsed.state.user = null;
+        localStorage.setItem("forgehub-auth", JSON.stringify(parsed));
+      }
+    } catch {
+      // ignore
+    }
+    window.location.href = "/login";
+  }
 
   if (!res.ok) {
     let parsedBody: unknown = undefined;
@@ -74,7 +105,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 /** POST multipart/form-data (file uploads) -- bypasses the JSON request()
  * helper since fetch must set its own multipart boundary header. */
 async function postForm<T>(path: string, formData: FormData, params?: RequestOptions["params"]): Promise<T> {
-  const res = await fetch(buildUrl(path, params), { method: "POST", body: formData });
+  const token = getToken();
+  const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await fetch(buildUrl(path, params), { method: "POST", body: formData, headers: authHeader });
 
   if (!res.ok) {
     let parsedBody: unknown = undefined;

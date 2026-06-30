@@ -94,7 +94,7 @@ Key conventions, binding for any new domain code (stated in docstrings across `d
 ### Backend: non-domain pieces
 
 - **`auth.py` is an explicit placeholder.** It checks credentials against a single hardcoded dev user from `settings.DEV_USER_USERNAME`/`DEV_USER_PASSWORD` — there is no real Users/Auth domain yet (out of scope per PRD/SPEC at this stage). Its docstring asks that a future real implementation keep the same contract (`POST /api/v1/auth/token`, `OAuth2PasswordRequestForm` in, `{access_token, token_type}` out).
-- **`foundation.py` is a different kind of router** — it doesn't touch the database at all. It reads from filesystem mounts (`/vault/Agents`, `/profiles`) to expose Hermes Foundation agent metadata (SOUL.md, sub-agents, skills, MEMORY.md) over HTTP. Those mounts come from `docker-compose.yml`'s bind mounts of `/root/.hermes/foundation/vault` and `/root/.hermes/profiles` — this router will 404/return empty data if run outside that container or without equivalent local mounts.
+- **`foundation.py` is a different kind of router** — it doesn't touch the database at all. It reads from filesystem mounts (`/vault/Agents`, `/profiles`) to expose Hermes Foundation agent metadata (SOUL.md, sub-agents, skills, MEMORY.md) over HTTP. Those mounts come from `docker-compose.yml`'s bind mounts of `/root/.hermes/knowledge_base/vault` and `/root/.hermes/profiles` — this router will 404/return empty data if run outside that container or without equivalent local mounts.
 - **`docker-compose.yml`** also joins the external `hermes_foundation_pg_default` network (for reaching `company_postgres`) in addition to backend↔frontend's own default network.
 
 ### Frontend: per-domain page + hook pairing

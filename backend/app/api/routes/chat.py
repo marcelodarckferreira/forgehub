@@ -7,14 +7,17 @@ router only owns persistence (chat_sessions/chat_messages, for the
 conversation history view) and the proxy call; it has no access to the
 Hermes CLI itself.
 """
+import json
 import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.chat import (
+    ChatApproveRequest,
     ChatMessageOut,
     ChatSendResult,
     ChatSessionCreate,
@@ -238,8 +241,152 @@ async def send_chat_message(
 
 
 # --------------------------------------------------------------------------
+# Streaming chat (SSE proxy — streams token deltas for voice mode)
+# --------------------------------------------------------------------------
+
+
+@router.get("/sessions/{session_id}/messages/stream")
+async def stream_chat_message(
+    session_id: uuid.UUID,
+    message: str,
+    voice: bool = False,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """SSE proxy: saves user message, streams agent deltas, saves assistant message on done.
+    voice=true injects a brevity instruction before sending to the agent (not stored in DB).
+    """
+    session = await _get_session_or_404(db, session_id)
+    agent = await _get_chattable_agent_or_404(db, session.agent_id)
+
+    # Persist user message immediately (original text, no brevity wrapper)
+    user_msg = ChatMessage(session_id=session.id, role="user", content=message)
+    db.add(user_msg)
+    if session.title == "New chat" and message.strip():
+        session.title = message.strip()[:TITLE_PREVIEW_LENGTH]
+    await db.commit()
+    await db.refresh(user_msg)
+
+    # Voice mode: wrap with brevity instruction for the agent call only
+    bridge_message = message
+    if voice:
+        bridge_message = (
+            f"{message}\n\n"
+            "(Modo voz — responda em no máximo 2 frases curtas e naturais, "
+            "como numa conversa oral. Sem listas, sem markdown.)"
+        )
+
+    # Voice mode takes the fast ForgeRouter direct path (raw history, no tools,
+    # ~2s first token) -- text mode takes the subprocess path (real hermes chat
+    # session, full tool-calling) by omitting `history` and resuming via
+    # `session_id`, same as the non-streaming /messages endpoint above.
+    bridge_params = {"profile": agent.profile_slug, "message": bridge_message}
+    if voice:
+        history_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session.id)
+            .where(ChatMessage.id != user_msg.id)
+            .order_by(ChatMessage.created_at)
+            .limit(20)
+        )
+        history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
+        bridge_params["history"] = json.dumps(history)
+    elif session.hermes_session_id:
+        bridge_params["session_id"] = session.hermes_session_id
+
+    accumulated: list[str] = []
+
+    async def proxy_stream():
+        try:
+            async with httpx.AsyncClient(timeout=660.0) as client:
+                async with client.stream(
+                    "GET",
+                    f"{settings.CHAT_BRIDGE_URL}/v1/chat/stream",
+                    params=bridge_params,
+                    headers=_bridge_headers(),
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        yield f'data: {json.dumps({"error": body.decode()[:200]})}\n\n'
+                        return
+
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        raw = line[5:].strip()
+                        data = json.loads(raw)
+
+                        if data.get("error"):
+                            yield f"data: {raw}\n\n"
+                            return
+
+                        if data.get("done"):
+                            # Persist assistant message and update hermes session id
+                            full_reply = data.get("reply") or "".join(accumulated)
+                            new_hsid = data.get("session_id")
+                            asst_msg = ChatMessage(
+                                session_id=session.id, role="assistant", content=full_reply
+                            )
+                            db.add(asst_msg)
+                            if new_hsid:
+                                session.hermes_session_id = new_hsid
+                            await db.commit()
+                            yield f'data: {json.dumps({"done": True})}\n\n'
+                            return
+
+                        delta = data.get("delta", "")
+                        accumulated.append(delta)
+                        yield f"data: {raw}\n\n"
+
+        except Exception as exc:
+            yield f'data: {json.dumps({"error": str(exc)})}\n\n'
+
+    return StreamingResponse(
+        proxy_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/approve")
+async def approve_chat_action(payload: ChatApproveRequest) -> dict:
+    """Answers a privileged-action approval_request raised mid-stream by an
+    agent (e.g. a dangerous terminal command). Proxied straight through to
+    the bridge, which writes the decision into the waiting subprocess's stdin."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            f"{settings.CHAT_BRIDGE_URL}/v1/chat/approve",
+            json={"stream_id": payload.stream_id, "choice": payload.choice},
+            headers=_bridge_headers(),
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Chat bridge error: {resp.text[:500]}",
+        )
+    return resp.json()
+
+
+# --------------------------------------------------------------------------
 # Voice transcription (proxied to the bridge's faster-whisper instance)
 # --------------------------------------------------------------------------
+
+
+@router.post("/tts")
+async def tts(payload: dict) -> StreamingResponse:
+    """Proxy text-to-speech synthesis to the Piper endpoint in the host bridge."""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{settings.CHAT_BRIDGE_URL}/v1/tts",
+            json=payload,
+            headers=_bridge_headers(),
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"TTS bridge error: {resp.text[:200]}",
+        )
+    from fastapi import Response as FResponse
+    return FResponse(content=resp.content, media_type="audio/wav")
 
 
 @router.post("/transcribe")
