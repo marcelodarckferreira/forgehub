@@ -717,6 +717,13 @@ async def list_stage_gates(stage_id: uuid.UUID, db: AsyncSession = Depends(get_d
     return list(result.scalars().all())
 
 
+@router.get("/gates", response_model=list[PipelineStageGateOut])
+async def list_all_gates(db: AsyncSession = Depends(get_db)) -> list[PipelineStageGate]:
+    """Flat list of all gates across all stages — used for comboboxes."""
+    result = await db.execute(select(PipelineStageGate).order_by(PipelineStageGate.name))
+    return list(result.scalars().all())
+
+
 @router.get("/gates/{gate_id}", response_model=PipelineStageGateOut)
 async def get_stage_gate(gate_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> PipelineStageGate:
     gate = await db.get(PipelineStageGate, gate_id)

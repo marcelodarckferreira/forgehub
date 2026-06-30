@@ -20,6 +20,7 @@ import ArtifactPage from "@/pages/artifact";
 import ArtifactDetailPage from "@/pages/artifact/[id]";
 import GovernancePage from "@/pages/governance";
 import ApprovalDetailPage from "@/pages/governance/[id]";
+import PoliciesPage from "@/pages/governance/PoliciesPage";
 import ForgeRouterPage from "@/pages/forgerouter";
 import KanboardPage from "@/pages/kanboard";
 import ObsidianPage from "@/pages/obsidian";
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="artifact/:id" element={<ArtifactDetailPage />} />
         <Route path="governance" element={<GovernancePage />} />
         <Route path="governance/:id" element={<ApprovalDetailPage />} />
+        <Route path="governance/policies" element={<PoliciesPage />} />
         <Route path="forgerouter" element={<ForgeRouterPage />} />
         <Route path="kanboard" element={<KanboardPage />} />
         <Route path="obsidian" element={<ObsidianPage />} />

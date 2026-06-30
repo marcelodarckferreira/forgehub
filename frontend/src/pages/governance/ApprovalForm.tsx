@@ -1,4 +1,4 @@
-import { useForm } from "react-hook-form";
+import { useForm, useWatch, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,12 @@ import {
   APPROVAL_ENTITY_TYPES,
   approvalCreateSchema,
   type ApprovalCreateInput,
+  usePolicies,
 } from "@/hooks/useGovernance";
+import { useTasks } from "@/hooks/useTask";
+import { useArtifacts } from "@/hooks/useArtifact";
+import { useAllProductVersions } from "@/hooks/useProduct";
+import { useAllGates } from "@/hooks/usePipeline";
 
 interface ApprovalFormProps {
   defaultValues?: Partial<ApprovalCreateInput>;
@@ -20,6 +25,58 @@ interface ApprovalFormProps {
   submitLabel?: string;
 }
 
+function EntitySelect({
+  entityType,
+  value,
+  onChange,
+}: {
+  entityType: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const tasks = useTasks();
+  const artifacts = useArtifacts();
+  const versions = useAllProductVersions();
+  const gates = useAllGates();
+
+  const makeSelect = (options: { id: string; label: string }[]) => (
+    <Select value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Selecione…</option>
+      {options.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.label}
+        </option>
+      ))}
+    </Select>
+  );
+
+  if (entityType === "project_task") {
+    const opts = (tasks.data ?? []).map((t) => ({ id: t.id, label: t.title }));
+    return makeSelect(opts);
+  }
+  if (entityType === "artifact") {
+    const opts = (artifacts.data ?? []).map((a) => ({ id: a.id, label: a.name }));
+    return makeSelect(opts);
+  }
+  if (entityType === "release") {
+    const opts = (versions.data ?? []).map((v) => ({ id: v.id, label: v.version }));
+    return makeSelect(opts);
+  }
+  if (entityType === "pipeline_stage_gate") {
+    const opts = (gates.data ?? []).map((g) => ({ id: g.id, label: g.name }));
+    return makeSelect(opts);
+  }
+
+  // Fallback for types without a list endpoint (skill, change_request, etc.)
+  return (
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder="UUID da entidade"
+    />
+  );
+}
+
 export function ApprovalForm({
   defaultValues,
   onSubmit,
@@ -27,8 +84,11 @@ export function ApprovalForm({
   isSubmitting,
   submitLabel = "Create approval",
 }: ApprovalFormProps) {
+  const { data: policies } = usePolicies();
+
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors },
   } = useForm<ApprovalCreateInput>({
@@ -44,11 +104,13 @@ export function ApprovalForm({
     },
   });
 
+  const entityType = useWatch({ control, name: "entity_type" });
+
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="entity_type">Entity type</Label>
+          <Label htmlFor="entity_type">Tipo de entidade</Label>
           <Select id="entity_type" {...register("entity_type")}>
             {APPROVAL_ENTITY_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -62,11 +124,17 @@ export function ApprovalForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="entity_id">Entity ID</Label>
-          <Input
-            id="entity_id"
-            placeholder="uuid of the gate, release, skill, etc."
-            {...register("entity_id")}
+          <Label htmlFor="entity_id">Entidade</Label>
+          <Controller
+            control={control}
+            name="entity_id"
+            render={({ field }) => (
+              <EntitySelect
+                entityType={entityType}
+                value={field.value}
+                onChange={field.onChange}
+              />
+            )}
           />
           {errors.entity_id && (
             <p className="text-sm text-destructive">{errors.entity_id.message}</p>
@@ -76,10 +144,10 @@ export function ApprovalForm({
 
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label htmlFor="approval_type">Approval type</Label>
+          <Label htmlFor="approval_type">Tipo de aprovação</Label>
           <Input
             id="approval_type"
-            placeholder="e.g. gate_approval, release_approval, security_review"
+            placeholder="ex: gate_approval, release_approval, security_review"
             {...register("approval_type")}
           />
           {errors.approval_type && (
@@ -88,8 +156,8 @@ export function ApprovalForm({
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="requested_by">Requested by</Label>
-          <Input id="requested_by" placeholder="agent or user id" {...register("requested_by")} />
+          <Label htmlFor="requested_by">Solicitado por</Label>
+          <Input id="requested_by" placeholder="agente ou usuário" {...register("requested_by")} />
           {errors.requested_by && (
             <p className="text-sm text-destructive">{errors.requested_by.message}</p>
           )}
@@ -97,22 +165,25 @@ export function ApprovalForm({
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="policy_id">Policy ID</Label>
-        <Input
-          id="policy_id"
-          placeholder="uuid of the governing policy (optional)"
-          {...register("policy_id")}
-        />
+        <Label htmlFor="policy_id">Política (opcional)</Label>
+        <Select id="policy_id" {...register("policy_id")}>
+          <option value="">Sem política vinculada</option>
+          {(policies ?? []).map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </Select>
         {errors.policy_id && (
           <p className="text-sm text-destructive">{errors.policy_id.message}</p>
         )}
       </div>
 
       <div className="space-y-2">
-        <Label htmlFor="comments">Comments</Label>
+        <Label htmlFor="comments">Comentários</Label>
         <Textarea
           id="comments"
-          placeholder="Rationale for the request, conditions, or context"
+          placeholder="Justificativa, condições ou contexto"
           {...register("comments")}
         />
         {errors.comments && (
@@ -123,7 +194,7 @@ export function ApprovalForm({
       <div className="flex justify-end gap-2 pt-2">
         {onCancel && (
           <Button type="button" variant="outline" onClick={onCancel} disabled={isSubmitting}>
-            Cancel
+            Cancelar
           </Button>
         )}
         <Button type="submit" disabled={isSubmitting}>

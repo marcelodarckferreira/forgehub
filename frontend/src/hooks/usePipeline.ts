@@ -330,3 +330,11 @@ export function usePipelineGate(gateId: string | undefined) {
     staleTime: 300_000,
   });
 }
+
+export function useAllGates() {
+  return useQuery({
+    queryKey: ["pipeline-gates", "all"],
+    queryFn: () => apiClient.get<StageGate[]>("/api/v1/pipelines/gates"),
+    staleTime: 60_000,
+  });
+}

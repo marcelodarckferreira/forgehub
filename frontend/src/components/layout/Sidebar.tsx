@@ -87,6 +87,7 @@ const NAV_SECTIONS: NavSectionEntry[] = [
           { to: "/tasks", label: "Execution", icon: CheckSquare, module: "tasks" },
           { to: "/artifact", label: "Artifacts", icon: FileBox, module: "artifacts" },
           { to: "/governance", label: "Governance", icon: Gavel, module: "governance" },
+          { to: "/governance/policies", label: "Policies", icon: ShieldCheck, module: "governance" },
         ],
       },
     ],

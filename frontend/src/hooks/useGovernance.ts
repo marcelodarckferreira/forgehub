@@ -198,3 +198,36 @@ export function usePolicy(id: string | undefined) {
     enabled: Boolean(id),
   });
 }
+
+export interface PolicyInput {
+  name: string;
+  description?: string;
+  policy_type: string;
+  rules?: Record<string, unknown>;
+  is_active?: boolean;
+}
+
+export function useCreatePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: PolicyInput) => apiClient.post<Policy>(`${RESOURCE}/policies`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: governanceKeys.policies }),
+  });
+}
+
+export function useUpdatePolicy(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Partial<PolicyInput>) =>
+      apiClient.put<Policy>(`${RESOURCE}/policies/${id}`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: governanceKeys.policies }),
+  });
+}
+
+export function useDeletePolicy() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiClient.delete(`${RESOURCE}/policies/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: governanceKeys.policies }),
+  });
+}

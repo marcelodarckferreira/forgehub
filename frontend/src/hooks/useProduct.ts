@@ -83,6 +83,14 @@ export function useProductVersions(productId: string | undefined) {
   });
 }
 
+export function useAllProductVersions() {
+  return useQuery({
+    queryKey: ["product-versions", "all"],
+    queryFn: () => apiClient.get<ProductVersion[]>(`${RESOURCE}/versions`),
+    staleTime: 60_000,
+  });
+}
+
 export function useCreateProduct() {
   const queryClient = useQueryClient();
   return useMutation({
