@@ -70,8 +70,8 @@ export default function ProfilesPage() {
               </div>
             )}
 
-            {/* Permissions matrix */}
-            <div className="overflow-x-auto">
+            {/* Permissions matrix — hidden while edit form is open */}
+            {editing !== profile.id && <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-border/50">
@@ -94,7 +94,7 @@ export default function ProfilesPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </CardContent>
         </Card>
       ))}
