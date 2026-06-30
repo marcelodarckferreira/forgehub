@@ -31,6 +31,7 @@ import DatabaseSchemaPage from "@/pages/database/SchemaPage";
 import DatabaseDiagramPage from "@/pages/database/DiagramPage";
 import DatabaseQueryPage from "@/pages/database/QueryPage";
 import UsersPage from "@/pages/users";
+import ProfilesPage from "@/pages/profiles";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const token = useAuthStore((s) => s.token);
@@ -77,6 +78,7 @@ export default function App() {
         <Route path="crons" element={<CronsPage />} />
         <Route path="deploy" element={<DeployPage />} />
         <Route path="users" element={<UsersPage />} />
+        <Route path="profiles" element={<ProfilesPage />} />
         <Route path="database" element={<DatabaseLayout />}>
           <Route index element={<DatabaseSchemaPage />} />
           <Route path="schema" element={<DatabaseSchemaPage />} />

@@ -1,9 +1,9 @@
 """User model for authentication and access control."""
 import uuid
 
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 
@@ -20,3 +20,12 @@ class User(Base, TimestampMixin):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("company.profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    profile: Mapped[object] = relationship(
+        "Profile", foreign_keys=[profile_id], lazy="select"
+    )

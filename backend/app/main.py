@@ -29,6 +29,7 @@ from app.api.routes import (
     governance,
     pipeline,
     product,
+    profiles,
     project,
     systemstats,
     task,
@@ -80,6 +81,7 @@ app.include_router(cron_scripts.router)
 app.include_router(deploy.router)
 app.include_router(database.router)
 app.include_router(users.router)
+app.include_router(profiles.router)
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
@@ -111,30 +113,58 @@ async def _tool_version_poll_loop() -> None:
 
 @app.on_event("startup")
 async def _bootstrap_admin() -> None:
-    """Ensure at least one admin user exists — uses DEV_USER settings."""
+    """Ensure default profiles exist and admin user is seeded."""
     from sqlalchemy import select
     from app.core.security import hash_password
     from app.db.base import AsyncSessionLocal
+    from app.db.models.profile import MODULES, Profile, ProfilePermission
     from app.db.models.user import User
 
     async with AsyncSessionLocal() as db:
         try:
-            result = await db.execute(
-                select(User).where(User.username == settings.DEV_USER_USERNAME)
-            )
-            if result.scalar_one_or_none() is None:
-                admin = User(
+            # -- Default profiles ------------------------------------------
+            default_profiles = [
+                {
+                    "name": "Administrador",
+                    "description": "Acesso total a todos os módulos",
+                    "perms": {"can_view": True, "can_query": True, "can_write": True, "can_delete": True},
+                },
+                {
+                    "name": "Padrão",
+                    "description": "Visualização e consulta sem alterações",
+                    "perms": {"can_view": True, "can_query": True, "can_write": False, "can_delete": False},
+                },
+            ]
+            admin_profile_id = None
+            for pd in default_profiles:
+                res = await db.execute(select(Profile).where(Profile.name == pd["name"]))
+                profile = res.scalar_one_or_none()
+                if profile is None:
+                    profile = Profile(name=pd["name"], description=pd["description"])
+                    db.add(profile)
+                    await db.flush()
+                    for m in MODULES:
+                        db.add(ProfilePermission(profile_id=profile.id, module=m, **pd["perms"]))
+                    logger.info("Bootstrap profile created: %s", pd["name"])
+                if pd["name"] == "Administrador":
+                    admin_profile_id = profile.id
+
+            # -- Admin user ------------------------------------------------
+            res = await db.execute(select(User).where(User.username == settings.DEV_USER_USERNAME))
+            if res.scalar_one_or_none() is None:
+                db.add(User(
                     username=settings.DEV_USER_USERNAME,
                     hashed_password=hash_password(settings.DEV_USER_PASSWORD),
                     full_name="Admin",
                     is_admin=True,
                     is_active=True,
-                )
-                db.add(admin)
-                await db.commit()
+                    profile_id=admin_profile_id,
+                ))
                 logger.info("Bootstrap admin created: %s", settings.DEV_USER_USERNAME)
+
+            await db.commit()
         except Exception:
-            logger.exception("Bootstrap admin check failed (table may not exist yet)")
+            logger.exception("Bootstrap failed (tables may not exist yet)")
 
 
 @app.on_event("startup")

@@ -8,12 +8,23 @@ export interface AuthUser {
   full_name: string | null;
   is_active: boolean;
   is_admin: boolean;
+  profile_id: string | null;
 }
+
+export interface ModulePermission {
+  can_view: boolean;
+  can_query: boolean;
+  can_write: boolean;
+  can_delete: boolean;
+}
+
+export type PermissionMap = Record<string, ModulePermission>;
 
 interface AuthState {
   token: string | null;
   user: AuthUser | null;
-  setAuth: (token: string, user: AuthUser) => void;
+  permissions: PermissionMap;
+  setAuth: (token: string, user: AuthUser, permissions: PermissionMap) => void;
   clearAuth: () => void;
 }
 
@@ -22,8 +33,9 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       token: null,
       user: null,
-      setAuth: (token, user) => set({ token, user }),
-      clearAuth: () => set({ token: null, user: null }),
+      permissions: {},
+      setAuth: (token, user, permissions) => set({ token, user, permissions }),
+      clearAuth: () => set({ token: null, user: null, permissions: {} }),
     }),
     { name: "forgehub-auth" }
   )

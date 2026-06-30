@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AuthUser } from "@/store/authStore";
-import { useCreateUser, useUpdateUser } from "@/hooks/useAuth";
+import { useCreateUser, useUpdateUser, useProfiles } from "@/hooks/useAuth";
 
 interface Props {
   user?: AuthUser;
@@ -18,7 +18,9 @@ export default function UserForm({ user, onClose }: Props) {
   const [fullName, setFullName] = useState(user?.full_name ?? "");
   const [isAdmin, setIsAdmin] = useState(user?.is_admin ?? false);
   const [isActive, setIsActive] = useState(user?.is_active ?? true);
+  const [profileId, setProfileId] = useState(user?.profile_id ?? "");
 
+  const { data: profiles } = useProfiles();
   const createMut = useCreateUser();
   const updateMut = useUpdateUser();
   const isPending = createMut.isPending || updateMut.isPending;
@@ -36,6 +38,7 @@ export default function UserForm({ user, onClose }: Props) {
             full_name: fullName || undefined,
             is_admin: isAdmin,
             is_active: isActive,
+            profile_id: profileId || null,
           },
         });
       } else {
@@ -45,6 +48,7 @@ export default function UserForm({ user, onClose }: Props) {
           email: email || undefined,
           full_name: fullName || undefined,
           is_admin: isAdmin,
+          profile_id: profileId || undefined,
         });
       }
       onClose();
@@ -78,6 +82,19 @@ export default function UserForm({ user, onClose }: Props) {
       <div className="flex flex-col gap-1">
         <Label>E-mail</Label>
         <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="joao@exemplo.com" />
+      </div>
+      <div className="flex flex-col gap-1 col-span-2">
+        <Label>Perfil de Acesso</Label>
+        <select
+          value={profileId}
+          onChange={(e) => setProfileId(e.target.value)}
+          className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+        >
+          <option value="">— sem perfil —</option>
+          {profiles?.map((p) => (
+            <option key={p.id} value={p.id}>{p.name}</option>
+          ))}
+        </select>
       </div>
       <div className="flex items-center gap-4 col-span-2">
         <label className="flex items-center gap-2 cursor-pointer select-none">
