@@ -40,6 +40,23 @@ async def browse_dirs(path: str | None = Query(default=None)) -> dict:
     return resp.json()
 
 
+@router.get("/fs-list")
+async def fs_list(path: str | None = Query(default=None)) -> dict:
+    """Proxy to the bridge's host file/dir listing (files included, unlike
+    /browse-dirs) -- backs the chat composer's "@" file-mention picker."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            f"{settings.CHAT_BRIDGE_URL}/v1/fs/list",
+            params={"path": path} if path else {},
+            headers={"X-Bridge-Token": settings.CHAT_BRIDGE_TOKEN},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Chat bridge error: {resp.text[:500]}"
+        )
+    return resp.json()
+
+
 @router.post("/sessions/{session_id}/kill")
 async def kill_session(session_id: str) -> dict:
     """Proxy to the bridge's session kill -- ends a terminal tab's tmux

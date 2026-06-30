@@ -127,6 +127,105 @@ export function useSendChatMessage(agentId: string | undefined) {
   });
 }
 
+export type ChatStreamEvent =
+  | { type: "delta"; text: string }
+  | { type: "tool_start"; toolId: string; name: string; context?: string }
+  | { type: "tool_complete"; toolId: string; name: string; summary?: string }
+  | { type: "approval_request"; streamId: string; command?: string; description?: string }
+  | { type: "done"; reply: string }
+  | { type: "error"; message: string };
+
+function parseChatStreamLine(raw: string): ChatStreamEvent | null {
+  let data: any;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (data.error) return { type: "error", message: String(data.error) };
+  if (data.done) return { type: "done", reply: data.reply ?? "" };
+  if (data.tool_start) {
+    return {
+      type: "tool_start",
+      toolId: data.tool_start.tool_id,
+      name: data.tool_start.name,
+      context: data.tool_start.context,
+    };
+  }
+  if (data.tool_complete) {
+    return {
+      type: "tool_complete",
+      toolId: data.tool_complete.tool_id,
+      name: data.tool_complete.name,
+      summary: data.tool_complete.summary,
+    };
+  }
+  if (data.approval_request) {
+    return {
+      type: "approval_request",
+      streamId: data.approval_request.stream_id,
+      command: data.approval_request.command,
+      description: data.approval_request.description,
+    };
+  }
+  if (typeof data.delta === "string") return { type: "delta", text: data.delta };
+  return null;
+}
+
+/** Text-mode streaming send -- hits the SSE subprocess path (full tool-calling),
+ * unlike useSendChatMessage's one-shot POST. No file-upload support (GET-only). */
+export function useStreamChatMessage(agentId: string | undefined) {
+  const queryClient = useQueryClient();
+  return async function streamMessage(
+    sessionId: string,
+    message: string,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const token = localStorage.getItem("access_token") ?? "";
+    const apiBase = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8000";
+    const url = `${apiBase}${RESOURCE}/sessions/${sessionId}/messages/stream?message=${encodeURIComponent(message)}`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal });
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let lineBuffer = "";
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        lineBuffer += decoder.decode(value, { stream: true });
+        const lines = lineBuffer.split("\n");
+        lineBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const event = parseChatStreamLine(line.slice(5).trim());
+          if (!event) continue;
+          onEvent(event);
+          if (event.type === "error") throw new Error(event.message);
+          if (event.type === "done") {
+            queryClient.invalidateQueries({ queryKey: chatKeys.messages(sessionId) });
+            queryClient.invalidateQueries({ queryKey: chatKeys.sessions(agentId) });
+            return;
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+}
+
+export function useApproveChat() {
+  return useMutation({
+    mutationFn: ({ streamId, choice }: { streamId: string; choice: "approve" | "deny" }) =>
+      apiClient.post<{ status: string }>(`${RESOURCE}/approve`, { stream_id: streamId, choice }),
+  });
+}
+
 export function useTranscribeAudio() {
   return useMutation({
     mutationFn: async (audioBlob: Blob) => {

@@ -65,6 +65,11 @@ PROFILE_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
 CHAT_TIMEOUT_SECONDS = 600
 SESSION_ID_RE = re.compile(r"session_id:\s*(\S+)")
 
+# stream_id (minted by hermes_stream.py per request, see its --stream-id-less
+# self-generated id) -> the live subprocess, so POST /v1/chat/approve can
+# write an approval decision into the right agent's stdin.
+_active_streams: dict[str, "asyncio.subprocess.Process"] = {}
+
 
 
 def _is_valid_profile(profile: str) -> bool:
@@ -516,10 +521,20 @@ async def chat_stream(
     async def event_stream():
         proc = await asyncio.create_subprocess_exec(
             *cmd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env={**os.environ, "HERMES_HOME": profile_home, "HERMES_SESSION_SOURCE": "tool"},
+            env={
+                **os.environ,
+                "HERMES_HOME": profile_home,
+                "HERMES_SESSION_SOURCE": "tool",
+                # Routes dangerous-command approval through hermes_stream.py's
+                # register_gateway_notify callback instead of CLI input()
+                # (see tools.approval._is_gateway_approval_context()).
+                "HERMES_GATEWAY_SESSION": "1",
+            },
         )
+        stream_id: str | None = None
         try:
             while True:
                 line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=660)  # type: ignore[union-attr]
@@ -532,13 +547,23 @@ async def chat_stream(
                     data = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if data.get("done") or data.get("error"):
-                    yield f"data: {line}\n\n"
-                    break
+                if data.get("stream_id") and stream_id is None:
+                    stream_id = data["stream_id"]
+                    _active_streams[stream_id] = proc
+                    continue  # internal bookkeeping line, not relayed to the frontend
                 yield f"data: {line}\n\n"
+                if data.get("done") or data.get("error"):
+                    break
         except asyncio.TimeoutError:
             yield f'data: {json.dumps({"error": "agent timeout"})}\n\n'
         finally:
+            if stream_id is not None:
+                _active_streams.pop(stream_id, None)
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except Exception:
+                pass
             try:
                 proc.kill()
             except Exception:
@@ -549,6 +574,24 @@ async def chat_stream(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class ChatApproveRequest(BaseModel):
+    stream_id: str
+    choice: str  # "approve" | "deny"
+
+
+@app.post("/v1/chat/approve")
+async def chat_approve(req: ChatApproveRequest, x_bridge_token: str | None = Header(default=None)) -> dict:
+    _check_token(x_bridge_token)
+    proc = _active_streams.get(req.stream_id)
+    if proc is None or proc.stdin is None:
+        raise HTTPException(status_code=404, detail="No pending approval for this stream_id")
+    resolved_choice = "deny" if req.choice == "deny" else "once"
+    line = json.dumps({"approval_response": {"choice": resolved_choice}}) + "\n"
+    proc.stdin.write(line.encode())
+    await proc.stdin.drain()
+    return {"status": "ok"}
 
 
 @app.post("/v1/chat-with-image", response_model=ChatResponse)
@@ -1207,9 +1250,9 @@ class FsListResponse(BaseModel):
 
 
 @app.get("/v1/fs/list", response_model=FsListResponse)
-async def fs_list(path: str = Query(...), x_bridge_token: str | None = Header(default=None)) -> FsListResponse:
+async def fs_list(path: str | None = Query(default=None), x_bridge_token: str | None = Header(default=None)) -> FsListResponse:
     _check_token(x_bridge_token)
-    target = Path(path)
+    target = Path(path).expanduser() if path else Path.home()
     if not target.is_dir():
         raise HTTPException(status_code=404, detail="Not a directory")
     try:

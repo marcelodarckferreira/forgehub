@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas.chat import (
+    ChatApproveRequest,
     ChatMessageOut,
     ChatSendResult,
     ChatSessionCreate,
@@ -274,15 +275,23 @@ async def stream_chat_message(
             "como numa conversa oral. Sem listas, sem markdown.)"
         )
 
-    # Fetch conversation history to pass directly to ForgeRouter (fast direct path)
-    history_result = await db.execute(
-        select(ChatMessage)
-        .where(ChatMessage.session_id == session.id)
-        .where(ChatMessage.id != user_msg.id)
-        .order_by(ChatMessage.created_at)
-        .limit(20)
-    )
-    history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
+    # Voice mode takes the fast ForgeRouter direct path (raw history, no tools,
+    # ~2s first token) -- text mode takes the subprocess path (real hermes chat
+    # session, full tool-calling) by omitting `history` and resuming via
+    # `session_id`, same as the non-streaming /messages endpoint above.
+    bridge_params = {"profile": agent.profile_slug, "message": bridge_message}
+    if voice:
+        history_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session.id)
+            .where(ChatMessage.id != user_msg.id)
+            .order_by(ChatMessage.created_at)
+            .limit(20)
+        )
+        history = [{"role": m.role, "content": m.content} for m in history_result.scalars().all()]
+        bridge_params["history"] = json.dumps(history)
+    elif session.hermes_session_id:
+        bridge_params["session_id"] = session.hermes_session_id
 
     accumulated: list[str] = []
 
@@ -292,11 +301,7 @@ async def stream_chat_message(
                 async with client.stream(
                     "GET",
                     f"{settings.CHAT_BRIDGE_URL}/v1/chat/stream",
-                    params={
-                        "profile": agent.profile_slug,
-                        "message": bridge_message,
-                        "history": json.dumps(history),
-                    },
+                    params=bridge_params,
                     headers=_bridge_headers(),
                 ) as resp:
                     if resp.status_code != 200:
@@ -340,6 +345,25 @@ async def stream_chat_message(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/approve")
+async def approve_chat_action(payload: ChatApproveRequest) -> dict:
+    """Answers a privileged-action approval_request raised mid-stream by an
+    agent (e.g. a dangerous terminal command). Proxied straight through to
+    the bridge, which writes the decision into the waiting subprocess's stdin."""
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        resp = await client.post(
+            f"{settings.CHAT_BRIDGE_URL}/v1/chat/approve",
+            json={"stream_id": payload.stream_id, "choice": payload.choice},
+            headers=_bridge_headers(),
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Chat bridge error: {resp.text[:500]}",
+        )
+    return resp.json()
 
 
 # --------------------------------------------------------------------------

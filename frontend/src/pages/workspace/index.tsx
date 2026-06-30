@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUp,
   AudioLines,
   Bot,
   Check,
   ChevronDown,
   Feather,
+  Folder,
   Loader2,
   MessageSquare,
   Mic,
@@ -33,6 +35,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { TerminalPane } from "@/components/TerminalPane";
 import { Markdown } from "@/components/Markdown";
 import { WorkingDirPicker } from "@/components/WorkingDirPicker";
+import { useFsList } from "@/hooks/useTerminalBrowse";
 import { apiClient } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useAgents, type Agent } from "@/hooks/useAgent";
@@ -43,10 +46,13 @@ import {
   useCreateChatSession,
   useDeleteChatSession,
   useUpdateChatSession,
+  useApproveChat,
   useSendChatMessage,
+  useStreamChatMessage,
   useTranscribeAudio,
   type ChatMessage,
   type ChatSession,
+  type ChatStreamEvent,
 } from "@/hooks/useChat";
 import { useChatHandoffStore } from "@/store/chatHandoff";
 
@@ -63,10 +69,26 @@ const ACTIVE_TAB_STORAGE_KEY = "forgehub-workspace-active-tab";
 const COMPOSER_MAX_HEIGHT_PX = 240;
 
 type WorkspaceTab =
-  | { kind: "chat"; id: string; agentId: string; historyCollapsed?: boolean }
+  | { kind: "chat"; id: string; agentId: string; historyCollapsed?: boolean; composerText?: string }
   | { kind: "terminal"; id: string; label: string; command?: string; cwd?: string };
 
 type Launcher = { label: string; command: string; icon?: string; iconBg?: string };
+
+type ChatQueueStep = { id: string; label: string; done: boolean };
+
+type ChatQueueApproval = { streamId: string; command?: string; description?: string };
+
+type ChatQueueItem = {
+  id: string;
+  content: string;
+  attachmentName: string | null;
+  file: File | null;
+  liveText: string;
+  steps: ChatQueueStep[];
+  status: "queued" | "processing" | "error";
+  error?: string;
+  approval: ChatQueueApproval | null;
+};
 
 // "CLI" -- AI coding-assistant CLIs you'd run ad-hoc against this checkout.
 const CLI_LAUNCHERS: Launcher[] = [
@@ -313,6 +335,112 @@ function AttachMenuButton({ onPickFile }: { onPickFile: () => void }) {
   );
 }
 
+/** "@" mention popover -- browse host files/dirs (via the same bridge used by
+ * the terminal working-dir picker) and insert a path reference into the
+ * composer, instead of inlining file content client-side (the agent already
+ * has filesystem tools to read whatever path it's given). */
+function MentionFilePicker({
+  rootPath,
+  onSelectPath,
+  onClose,
+}: {
+  rootPath?: string;
+  onSelectPath: (path: string) => void;
+  onClose: () => void;
+}) {
+  const [path, setPath] = useState<string | undefined>(rootPath);
+  const { data, isLoading } = useFsList(path, true);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useClickOutside(containerRef, onClose);
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute bottom-full left-0 z-20 mb-2 max-h-72 w-80 overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
+    >
+      <div className="sticky top-0 flex items-center justify-between gap-2 border-b border-border bg-card px-2 py-1.5">
+        <p className="truncate text-xs text-muted-foreground" title={data?.path}>
+          {data?.path ?? "..."}
+        </p>
+        <div className="flex items-center gap-1 shrink-0">
+          {data?.path && (
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onSelectPath(data.path)}>
+              Usar pasta
+            </Button>
+          )}
+          {data?.parent && (
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              aria-label="Pasta acima"
+              onClick={() => setPath(data.parent!)}
+            >
+              <ArrowUp className="h-3 w-3" />
+            </Button>
+          )}
+        </div>
+      </div>
+      {isLoading && <p className="px-3 py-3 text-xs text-muted-foreground">Carregando…</p>}
+      {data?.entries.map((entry) => (
+        <button
+          key={entry.path}
+          type="button"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+          onClick={() => (entry.type === "dir" ? setPath(entry.path) : onSelectPath(entry.path))}
+        >
+          {entry.type === "dir" ? (
+            <Folder className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <Paperclip className="h-3.5 w-3.5 shrink-0" />
+          )}
+          <span className="truncate">{entry.name}</span>
+        </button>
+      ))}
+      {data && data.entries.length === 0 && !isLoading && (
+        <p className="px-3 py-3 text-xs italic text-muted-foreground">Pasta vazia</p>
+      )}
+    </div>
+  );
+}
+
+/** Slash commands ForgeHub actually executes via Hermes's own process_command()
+ * dispatcher (see host-bridge/hermes_stream.py SAFE_SLASH_COMMANDS) instead of
+ * forwarding the text to the LLM -- keep this list in sync with that one. */
+const SAFE_SLASH_COMMANDS: { command: string; description: string }[] = [
+  { command: "/model", description: "Trocar de modelo (persiste por padrão)" },
+  { command: "/status", description: "Mostrar sessão, modelo, tokens e contexto" },
+  { command: "/help", description: "Mostrar comandos disponíveis" },
+  { command: "/usage", description: "Mostrar uso de tokens e limites da sessão" },
+  { command: "/version", description: "Mostrar versão do Hermes Agent" },
+  { command: "/title", description: "Definir um título para a sessão atual" },
+  { command: "/profile", description: "Mostrar perfil ativo e diretório home" },
+];
+
+function SlashCommandPicker({ onSelect, onClose }: { onSelect: (command: string) => void; onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  useClickOutside(containerRef, onClose);
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute bottom-full left-0 z-20 mb-2 w-80 overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
+    >
+      {SAFE_SLASH_COMMANDS.map((cmd) => (
+        <button
+          key={cmd.command}
+          type="button"
+          className="flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
+          onClick={() => onSelect(cmd.command)}
+        >
+          <span className="text-xs font-medium">{cmd.command}</span>
+          <span className="text-[11px] text-muted-foreground">{cmd.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function VoiceOrb({ status, compact = false }: { status: "listening" | "processing" | "speaking"; compact?: boolean }) {
   const speaking = status === "speaking";
   const processing = status === "processing";
@@ -413,23 +541,28 @@ function formatTime(iso: string) {
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
-  return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[75%] rounded-2xl px-4 py-2 text-sm shadow-sm",
-          isUser ? "bg-primary text-primary-foreground" : "bg-muted text-foreground"
-        )}
-      >
+
+  // ChatGPT-style: only the user's own turn gets a colored bubble. The
+  // agent's reply is plain text flowing in the page, no card/background.
+  if (!isUser) {
+    return (
+      <div className="max-w-[85%] text-sm text-foreground">
         {message.attachment_names && (
-          <p className={cn("mb-1 text-xs", isUser ? "text-primary-foreground/70" : "text-muted-foreground")}>
-            📎 {message.attachment_names}
-          </p>
+          <p className="mb-1 text-xs text-muted-foreground">📎 {message.attachment_names}</p>
         )}
         <Markdown content={message.content} />
-        <p className={cn("mt-1 text-[10px]", isUser ? "text-primary-foreground/70" : "text-muted-foreground")}>
-          {formatTime(message.created_at)}
-        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex justify-end">
+      <div className="max-w-[75%] rounded-2xl bg-primary px-4 py-2 text-sm text-primary-foreground shadow-sm">
+        {message.attachment_names && (
+          <p className="mb-1 text-xs text-primary-foreground/70">📎 {message.attachment_names}</p>
+        )}
+        <Markdown content={message.content} />
+        <p className="mt-1 text-[10px] text-primary-foreground/70">{formatTime(message.created_at)}</p>
       </div>
     </div>
   );
@@ -459,11 +592,13 @@ function ChatTabPanel({
   const [composerText, setComposerText] = useState(initialComposerText ?? "");
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [isRecording, setIsRecording] = useState(false);
-  const [pendingMessage, setPendingMessage] = useState<{ content: string; attachmentName: string | null } | null>(
-    null
-  );
+  const [queue, setQueue] = useState<ChatQueueItem[]>([]);
+  const queueDrainingRef = useRef(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [composerWarning, setComposerWarning] = useState<string | null>(null);
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [slashOpen, setSlashOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -526,6 +661,8 @@ function ChatTabPanel({
   const deleteSession = useDeleteChatSession(agentId || undefined);
   const updateSession = useUpdateChatSession(agentId || undefined);
   const sendMessage = useSendChatMessage(agentId || undefined);
+  const streamMessage = useStreamChatMessage(agentId || undefined);
+  const approveChat = useApproveChat();
   const transcribe = useTranscribeAudio();
 
   function handleStartRename(s: ChatSession) {
@@ -548,7 +685,7 @@ function ChatTabPanel({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pendingMessage]);
+  }, [messages, queue]);
 
   // Auto-grow the composer with its content -- the single-line height is
   // the floor (never shrinks below it), and it grows up to
@@ -576,7 +713,20 @@ function ChatTabPanel({
   }
 
   async function handleSend() {
-    if (!agentId || (!composerText.trim() && !attachedFile) || sendMessage.isPending) return;
+    if (!agentId) return;
+
+    const trimmed = composerText.trim();
+    if (!trimmed && !attachedFile) {
+      setComposerWarning("Digite uma mensagem antes de enviar.");
+      return;
+    }
+
+    const lastUserMessage =
+      queue[queue.length - 1]?.content ?? [...(messages ?? [])].reverse().find((m) => m.role === "user")?.content;
+    if (!attachedFile && trimmed && lastUserMessage?.trim() === trimmed) {
+      setComposerWarning("Você já enviou esta mensagem.");
+      return;
+    }
 
     let activeSessionId = sessionId;
     if (!activeSessionId) {
@@ -589,12 +739,80 @@ function ChatTabPanel({
     const file = attachedFile;
     setComposerText("");
     setAttachedFile(null);
-    setPendingMessage({ content: message, attachmentName: file?.name ?? null });
+    setComposerWarning(null);
+    setQueue((q) => [
+      ...q,
+      {
+        id: crypto.randomUUID(),
+        content: message,
+        attachmentName: file?.name ?? null,
+        file,
+        liveText: "",
+        steps: [],
+        status: "queued",
+        approval: null,
+      },
+    ]);
+  }
 
-    sendMessage.mutate(
-      { sessionId: activeSessionId, message, file },
-      { onSettled: () => setPendingMessage(null) }
+  // Drains the queue one request at a time -- a Hermes session is a single
+  // ongoing conversation, so requests for the same session must stay in
+  // order rather than racing each other.
+  useEffect(() => {
+    if (queueDrainingRef.current) return;
+    const next = queue.find((item) => item.status === "queued");
+    if (!next || !sessionId) return;
+
+    queueDrainingRef.current = true;
+    processQueueItem(next).finally(() => {
+      queueDrainingRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queue, sessionId]);
+
+  function handleStreamEvent(itemId: string, event: ChatStreamEvent) {
+    setQueue((q) =>
+      q.map((item) => {
+        if (item.id !== itemId) return item;
+        if (event.type === "delta") return { ...item, liveText: item.liveText + event.text };
+        if (event.type === "tool_start") {
+          return { ...item, steps: [...item.steps, { id: event.toolId, label: event.context || event.name, done: false }] };
+        }
+        if (event.type === "tool_complete") {
+          return {
+            ...item,
+            steps: item.steps.map((s) => (s.id === event.toolId ? { ...s, label: event.summary || s.label, done: true } : s)),
+          };
+        }
+        if (event.type === "approval_request") {
+          return {
+            ...item,
+            approval: { streamId: event.streamId, command: event.command, description: event.description },
+          };
+        }
+        return item;
+      })
     );
+  }
+
+  function handleApprovalChoice(itemId: string, streamId: string, choice: "approve" | "deny") {
+    setQueue((q) => q.map((it) => (it.id === itemId ? { ...it, approval: null } : it)));
+    approveChat.mutate({ streamId, choice });
+  }
+
+  async function processQueueItem(item: ChatQueueItem) {
+    setQueue((q) => q.map((it) => (it.id === item.id ? { ...it, status: "processing" } : it)));
+    try {
+      if (item.file) {
+        // File uploads only support the one-shot endpoint (the SSE endpoint is GET-only).
+        await sendMessage.mutateAsync({ sessionId, message: item.content, file: item.file });
+      } else {
+        await streamMessage(sessionId, item.content, (event) => handleStreamEvent(item.id, event));
+      }
+      setQueue((q) => q.filter((it) => it.id !== item.id));
+    } catch (err) {
+      setQueue((q) => q.map((it) => (it.id === item.id ? { ...it, status: "error", error: (err as Error).message } : it)));
+    }
   }
 
   const attachedImagePreviewUrl = useMemo(
@@ -626,7 +844,24 @@ function ChatTabPanel({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
+      return;
     }
+    if (e.key === "Escape" && (mentionOpen || slashOpen)) {
+      setMentionOpen(false);
+      setSlashOpen(false);
+    }
+  }
+
+  function handleMentionSelect(path: string) {
+    setComposerText((t) => (t.endsWith("@") ? t.slice(0, -1) : t) + `@${path} `);
+    setMentionOpen(false);
+    composerTextareaRef.current?.focus();
+  }
+
+  function handleSlashSelect(command: string) {
+    setComposerText(`${command} `);
+    setSlashOpen(false);
+    composerTextareaRef.current?.focus();
   }
 
   async function handleToggleRecording() {
@@ -1573,36 +1808,114 @@ function ChatTabPanel({
           {(messages ?? []).map((m) => (
             <MessageBubble key={m.id} message={m} />
           ))}
-          {pendingMessage && (
-            <MessageBubble
-              message={{
-                id: "pending-user-message",
-                session_id: sessionId,
-                role: "user",
-                content: pendingMessage.content,
-                attachment_names: pendingMessage.attachmentName,
-                created_at: new Date().toISOString(),
-              }}
-            />
-          )}
-          {sendMessage.isPending && (
-            <div className="flex justify-start">
-              <div className="flex items-center gap-1 rounded-2xl bg-muted px-4 py-3">
-                <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" />
-              </div>
+          {queue.map((item) => (
+            <div key={item.id} className="space-y-1">
+              <MessageBubble
+                message={{
+                  id: `pending-${item.id}`,
+                  session_id: sessionId,
+                  role: "user",
+                  content: item.content,
+                  attachment_names: item.attachmentName,
+                  created_at: new Date().toISOString(),
+                }}
+              />
+              {item.status === "queued" && (
+                <p className="pl-1 text-xs italic text-muted-foreground">Na fila…</p>
+              )}
+              {item.status === "processing" && (
+                <div className="flex max-w-[85%] flex-col gap-1">
+                  {item.steps.map((step) => (
+                    <p key={step.id} className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {step.done ? (
+                        <Check className="h-3 w-3 shrink-0" />
+                      ) : (
+                        <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                      )}
+                      {step.label}
+                    </p>
+                  ))}
+                  {item.liveText ? (
+                    <Markdown content={item.liveText} />
+                  ) : (
+                    item.steps.length === 0 &&
+                    !item.approval && (
+                      <div className="flex items-center gap-1 py-2">
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground" />
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
+              {item.approval && (
+                <div className="space-y-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+                  <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+                    O agente pede confirmação para executar uma ação privilegiada
+                  </p>
+                  {item.approval.description && (
+                    <p className="text-xs text-muted-foreground">{item.approval.description}</p>
+                  )}
+                  {item.approval.command && (
+                    <code className="block overflow-x-auto rounded bg-background/60 px-2 py-1 text-xs">
+                      {item.approval.command}
+                    </code>
+                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      onClick={() => handleApprovalChoice(item.id, item.approval!.streamId, "approve")}
+                    >
+                      Aprovar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleApprovalChoice(item.id, item.approval!.streamId, "deny")}
+                    >
+                      Negar
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {item.status === "error" && (
+                <p className="flex items-center gap-2 pl-1 text-xs text-destructive">
+                  Falhou: {item.error}
+                  <button
+                    type="button"
+                    aria-label="Dispensar"
+                    onClick={() => setQueue((q) => q.filter((it) => it.id !== item.id))}
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </p>
+              )}
             </div>
-          )}
-          {sendMessage.isError && (
-            <p className="text-center text-sm text-destructive">
-              Failed to send message: {(sendMessage.error as Error)?.message}
-            </p>
-          )}
+          ))}
           <div ref={messagesEndRef} />
         </div>
 
         <div className="space-y-2 border-t border-border p-3">
+          {queue.length > 1 && (
+            <div className="space-y-1 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-xs">
+              {queue.map((item) => (
+                <div key={item.id} className="flex items-center gap-2 text-muted-foreground">
+                  {item.status === "processing" ? (
+                    <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                  ) : item.status === "error" ? (
+                    <X className="h-3 w-3 shrink-0 text-destructive" />
+                  ) : (
+                    <span className="h-2 w-2 shrink-0 rounded-full border border-current" />
+                  )}
+                  <span className="truncate">{item.content || item.attachmentName}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {composerWarning && (
+            <p className="px-1 text-xs text-destructive">{composerWarning}</p>
+          )}
           {attachedFile && (
             <div className="flex w-fit items-center gap-2 rounded-md bg-muted px-2 py-1 text-xs">
               {attachedImagePreviewUrl ? (
@@ -1616,13 +1929,33 @@ function ChatTabPanel({
               </button>
             </div>
           )}
-          <div className="flex items-end gap-1 rounded-3xl border border-border bg-muted/50 px-2 py-1.5">
+          <div className="relative flex items-end gap-1 rounded-3xl border border-border bg-muted/50 px-2 py-1.5">
+            {mentionOpen && (
+              <MentionFilePicker onSelectPath={handleMentionSelect} onClose={() => setMentionOpen(false)} />
+            )}
+            {slashOpen && (
+              <SlashCommandPicker onSelect={handleSlashSelect} onClose={() => setSlashOpen(false)} />
+            )}
             <input ref={fileInputRef} type="file" className="hidden" onChange={handleFilePick} />
             <AttachMenuButton onPickFile={() => fileInputRef.current?.click()} />
             <Textarea
               ref={composerTextareaRef}
               value={composerText}
-              onChange={(e) => setComposerText(e.target.value)}
+              onChange={(e) => {
+                const value = e.target.value;
+                setComposerText(value);
+                if (composerWarning) setComposerWarning(null);
+                const last = value.slice(-1);
+                const beforeLast = value.slice(-2, -1);
+                if (last === "@" && (beforeLast === "" || /\s/.test(beforeLast))) {
+                  setMentionOpen(true);
+                }
+                if (value === "/") {
+                  setSlashOpen(true);
+                } else if (slashOpen && !value.startsWith("/")) {
+                  setSlashOpen(false);
+                }
+              }}
               onKeyDown={handleComposerKeyDown}
               onPaste={handleComposerPaste}
               placeholder={`Peça ao ${selectedAgent?.name ?? "agente"}`}

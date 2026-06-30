@@ -47,3 +47,12 @@ class ChatSendResult(BaseModel):
     user_message: ChatMessageOut
     assistant_message: ChatMessageOut
     session: ChatSessionOut
+
+
+class ChatApproveRequest(BaseModel):
+    """Answers a pending approval_request SSE event from /messages/stream.
+    stream_id addresses the live agent subprocess directly (see
+    host-bridge/hermes_stream.py); no session_id needed."""
+
+    stream_id: str
+    choice: str  # "approve" | "deny"
