@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AlertCircle, GitBranch, Loader2, Plus, Trash2 } from "lucide-react";
+import { AlertCircle, GitBranch, Loader2, Plus, Trash2, Pencil, X } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Card,
@@ -15,7 +15,9 @@ import {
   useCreatePipeline,
   useDeletePipeline,
   usePipelines,
+  useUpdatePipeline,
   type PipelineCreateInput,
+  type PipelineUpdateInput,
 } from "@/hooks/usePipeline";
 import { useProjects } from "@/hooks/useProject";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -38,6 +40,7 @@ export default function PipelinePage() {
   const createPipeline = useCreatePipeline();
   const deletePipeline = useDeletePipeline();
   const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const projectName = (id: string): string =>
@@ -45,13 +48,43 @@ export default function PipelinePage() {
 
   function handleCreate(values: PipelineCreateInput) {
     createPipeline.mutate(
-      {
-        ...values,
-        pipeline_template_id: values.pipeline_template_id || undefined,
-      },
-      {
-        onSuccess: () => setShowForm(false),
-      }
+      { ...values, pipeline_template_id: values.pipeline_template_id || undefined },
+      { onSuccess: () => setShowForm(false) }
+    );
+  }
+
+  function EditInline({ id }: { id: string }) {
+    const updatePipeline = useUpdatePipeline(id);
+    const pipeline = pipelines?.find((p) => p.id === id);
+    if (!pipeline) return null;
+
+    function handleUpdate(values: PipelineUpdateInput) {
+      updatePipeline.mutate(
+        { ...values, pipeline_template_id: values.pipeline_template_id || undefined },
+        { onSuccess: () => setEditingId(null) }
+      );
+    }
+
+    return (
+      <CardContent className="border-t border-border pt-4">
+        <PipelineForm
+          defaultValues={{
+            name: pipeline.name,
+            project_id: pipeline.project_id,
+            status: pipeline.status,
+            is_active: pipeline.is_active,
+          }}
+          onSubmit={handleUpdate}
+          onCancel={() => setEditingId(null)}
+          isSubmitting={updatePipeline.isPending}
+          submitLabel="Save changes"
+        />
+        {updatePipeline.isError && (
+          <p className="mt-2 text-sm text-destructive">
+            {(updatePipeline.error as Error)?.message}
+          </p>
+        )}
+      </CardContent>
     );
   }
 
@@ -163,16 +196,29 @@ export default function PipelinePage() {
                   >
                     View details
                   </Link>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPendingDeleteId(pipeline.id)}
-                    disabled={deletePipeline.isPending}
-                    aria-label={`Delete ${pipeline.name}`}
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditingId(editingId === pipeline.id ? null : pipeline.id)}
+                      aria-label={`Edit ${pipeline.name}`}
+                    >
+                      {editingId === pipeline.id
+                        ? <X className="h-4 w-4" />
+                        : <Pencil className="h-4 w-4" />}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPendingDeleteId(pipeline.id)}
+                      disabled={deletePipeline.isPending}
+                      aria-label={`Delete ${pipeline.name}`}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
                 </CardFooter>
+                {editingId === pipeline.id && <EditInline id={pipeline.id} />}
               </Card>
             );
           })}
